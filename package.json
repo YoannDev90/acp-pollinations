@@ -26,6 +26,7 @@
     "typecheck": "tsc --noEmit",
     "start": "node dist/bin/pollinations-acp-server.js",
     "models": "tsx scripts/check-catalogue.ts",
+    "pretest": "npm run build",
     "test": "vitest run",
     "tck": "tsx scripts/tck.ts"
   },

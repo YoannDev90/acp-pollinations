@@ -36,11 +36,10 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # `npm test` builds first (see the `pretest` script), because the e2e
+      # suite spawns the built binary rather than the sources.
       - name: Test
         run: npm test
-
-      - name: Build
-        run: npm run build
 
       # The entry point must stay executable, or a published install cannot run it.
       - name: Check the entry point is executable
