@@ -146,8 +146,16 @@ export async function connectMcpServer(config: McpServerConfig): Promise<McpConn
       // The server may not need the notification; ignore.
     }
 
-    const listed = (await send("tools/list", {})) as { tools?: unknown } | null;
-    const rawTools = Array.isArray(listed?.tools) ? (listed.tools as unknown[]) : [];
+    const rawTools: unknown[] = [];
+    let cursor: string | undefined;
+    do {
+      const listed = (await send("tools/list", cursor ? { cursor } : {})) as
+        | { tools?: unknown; nextCursor?: unknown }
+        | null;
+      if (Array.isArray(listed?.tools)) rawTools.push(...(listed.tools as unknown[]));
+      cursor = typeof listed?.nextCursor === "string" ? listed.nextCursor : undefined;
+    } while (cursor);
+
     for (const raw of rawTools) {
       if (typeof raw !== "object" || raw === null) continue;
       const tool = raw as McpTool;
