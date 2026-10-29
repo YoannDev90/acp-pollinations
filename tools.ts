@@ -6,6 +6,7 @@ import type { AgentContext, ClientCapabilities, ToolKind } from "@agentclientpro
 import { methods } from "@agentclientprotocol/sdk";
 
 import type { LlmToolDefinition } from "./llm.js";
+import type { McpToolBinding } from "./mcp.js";
 
 export type ToolName =
   | "read_file"
@@ -40,11 +41,16 @@ export type ToolContext = {
   clientCapabilities: ClientCapabilities | null;
   signal: AbortSignal;
   /**
+   * MCP tool bindings available for this session, keyed by the (possibly
+   * renamed) tool name exposed to the model.
+   */
+  mcpTools?: Map<string, McpToolBinding>;
+  /**
    * Resolves whether a mutating tool may run. Returning `false` aborts the
    * tool call without failing the turn.
    */
   approve: (params: {
-    name: ToolName;
+    name: string;
     kind: ToolKind;
     title: string;
     rawInput: unknown;
@@ -232,12 +238,30 @@ export async function executeTool(
   input: Record<string, unknown>,
   ctx: ToolContext,
 ): Promise<ToolExecutionResult> {
+  const binding = ctx.mcpTools?.get(name);
+  if (binding) {
+    if (binding.mutating) {
+      const approved = await ctx.approve({
+        name,
+        kind: binding.kind,
+        title: binding.title(input),
+        rawInput: input,
+      });
+      if (!approved) return { output: "The user rejected this operation.", isError: true };
+    }
+    try {
+      return await binding.call(input);
+    } catch (error) {
+      return { output: error instanceof Error ? error.message : String(error), isError: true };
+    }
+  }
+
   const definition = TOOL_DEFINITIONS[name as ToolName];
   if (!definition) return { output: `Unknown tool: ${name}`, isError: true };
 
   if (definition.mutating) {
     const approved = await ctx.approve({
-      name: name as ToolName,
+      name,
       kind: definition.kind,
       title: definition.title(input),
       rawInput: input,

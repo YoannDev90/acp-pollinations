@@ -29,11 +29,14 @@ supplies the Pollinations-specific behaviour on top of it.
 - **Tool loop** — file reads and writes, directory listing, glob, grep, and a
   shell, all confined to the session workspace, with ACP permission gating on
   anything that mutates.
+- **MCP servers** — stdio MCP servers supplied by the client are launched and
+  connected, and their tools are exposed to the model alongside the built-in
+  ones.
 - **Cancellation and cleanup** — a cancelled turn aborts in-flight work, and
   diffs are sent to the client as ACP `diff` content rather than as prose.
 
-Not implemented yet: MCP servers (the agent advertises no MCP capability),
-elicitation, and slash commands.
+Not implemented yet: elicitation and slash commands. MCP servers supplied by
+the client are connected over stdio and their tools are exposed to the model.
 
 ## Requirements
 
@@ -290,9 +293,7 @@ isolates `POLLINATIONS_HOME`, because `session/list` and `session/delete` are
 themselves conformance requirements and the suite will really delete sessions.
 
 Current verdict: **CONFORMANT** — 31/31 MANDATORY, 9/9 exercised CAPABILITY,
-12/13 ADVISORY. The one remaining failure is `ACP-SESSION-004`: the agent does
-not connect to MCP servers supplied by the client, which is the known MCP gap.
-The report lands in `.tck/report.json`.
+13/13 ADVISORY. The report lands in `.tck/report.json`.
 
 ## Library usage
 

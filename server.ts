@@ -33,6 +33,12 @@ import { createSessionStore } from "./sessions.js";
 import type { PersistedSession } from "./sessions.js";
 import { LLM_TOOLS, TOOL_DEFINITIONS, ToolError, executeTool } from "./tools.js";
 import type { ToolContext, ToolExecutionResult, ToolName } from "./tools.js";
+import {
+  connectMcpServers,
+  mergeMcpBindings,
+  type McpConnection,
+  type McpToolBinding,
+} from "./mcp.js";
 
 export const AGENT_NAME = "pollinations";
 export const AGENT_TITLE = "Pollinations";
@@ -65,6 +71,12 @@ type SessionState = {
   messageCounter: number;
   /** Prompt tokens of the last model request, as reported by the provider. */
   lastPromptTokens: number;
+  /** Live MCP connections for this session. */
+  mcpConnections: McpConnection[];
+  /** MCP tool bindings keyed by the name exposed to the model. */
+  mcpTools: Map<string, McpToolBinding>;
+  /** OpenAI tool definitions for the MCP tools, appended to the builtin set. */
+  mcpToolDefinitions: import("./llm.js").LlmToolDefinition[];
 };
 
 /**
@@ -180,8 +192,20 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       abort: null,
       messageCounter: 0,
       lastPromptTokens: 0,
+      mcpConnections: [],
+      mcpTools: new Map(),
+      mcpToolDefinitions: [],
     };
     sessions.set(sessionId, session);
+
+    // Connect to any MCP servers the client supplied. A failure here degrades
+    // to "no tools from that server" rather than failing session setup.
+    const connections = await connectMcpServers(ctx.params.mcpServers ?? []);
+    session.mcpConnections = connections;
+    const merged = mergeMcpBindings(connections);
+    session.mcpTools = merged.bindings;
+    session.mcpToolDefinitions = merged.definitions;
+
     await persist(session);
 
     // The picker is what lets the client switch models mid-session.
@@ -237,8 +261,17 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       abort: null,
       messageCounter: stored.messageCounter,
       lastPromptTokens: stored.lastPromptTokens,
+      mcpConnections: [],
+      mcpTools: new Map(),
+      mcpToolDefinitions: [],
     };
     sessions.set(sessionId, session);
+
+    const connections = await connectMcpServers(ctx.params.mcpServers ?? []);
+    session.mcpConnections = connections;
+    const merged = mergeMcpBindings(connections);
+    session.mcpTools = merged.bindings;
+    session.mcpToolDefinitions = merged.definitions;
 
     return { configOptions: [buildModelOption(await modelCatalog(), session.model)] };
   });
@@ -277,6 +310,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
 
     // Aborting first means a turn cannot write the session back after deletion.
     live?.abort?.abort();
+    for (const connection of live?.mcpConnections ?? []) connection.close();
     sessions.delete(sessionId);
     return {};
   });
@@ -555,9 +589,10 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     let usage: LlmUsage | undefined;
 
     const pendingCalls = new Map<number, { id: string; name: string; arguments: string }>();
+    const tools = [...LLM_TOOLS, ...session.mcpToolDefinitions];
     const iterator = llm.chat({
       messages: session.history,
-      tools: LLM_TOOLS,
+      tools,
       model: session.model,
       signal,
     });
@@ -631,7 +666,8 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       if (signal.aborted) return "cancelled";
 
       const definition = TOOL_DEFINITIONS[call.function.name as ToolName];
-      const kind: ToolKind = definition?.kind ?? "other";
+      const mcpBinding = session.mcpTools.get(call.function.name);
+      const kind: ToolKind = mcpBinding?.kind ?? definition?.kind ?? "other";
 
       let input: Record<string, unknown> = {};
       let parseError: string | null = null;
@@ -648,7 +684,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
 
       const title = parseError
         ? `Call ${call.function.name}`
-        : (definition?.title(input) ?? call.function.name);
+        : (mcpBinding?.title(input) ?? definition?.title(input) ?? call.function.name);
 
       await notify({
         sessionUpdate: "tool_call",
@@ -688,6 +724,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
           client,
           clientCapabilities: capabilities,
           signal,
+          mcpTools: session.mcpTools,
           approve: ({ name, kind, title, rawInput }) =>
             requestPermission({
               client,

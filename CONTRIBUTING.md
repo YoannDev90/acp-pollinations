@@ -56,9 +56,7 @@ is the only way to exercise the actual tool-calling loop — set a real
 Worth running for anything that touches the protocol: new capabilities,
 `configOptions`, session lifecycle. The report lands in `.tck/report.json`.
 
-Current state: **CONFORMANT** — 31/31 MANDATORY, 12/13 ADVISORY. The one
-remaining failure is `ACP-SESSION-004`: the agent does not connect to MCP
-servers supplied by the client.
+Current state: **CONFORMANT** — 31/31 MANDATORY, 13/13 ADVISORY.
 
 ## Conventions worth keeping
 

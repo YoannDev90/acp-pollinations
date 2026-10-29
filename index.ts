@@ -53,6 +53,14 @@ export {
 export type { CatalogModel, FetchModelCatalogOptions, ModelGroup, PricingTier } from "./models.js";
 
 export { LLM_TOOLS, TOOL_DEFINITIONS, ToolError, executeTool, globToRegExp } from "./tools.js";
+export {
+  connectMcpServer,
+  connectMcpServers,
+  isStdioMcpServer,
+  mergeMcpBindings,
+  normalizeMcpServer,
+} from "./mcp.js";
+export type { McpConnection, McpServerConfig, McpTool, McpToolBinding } from "./mcp.js";
 export type {
   ToolContext,
   ToolDefinition,
