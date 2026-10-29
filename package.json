@@ -1,0 +1,63 @@
+{
+  "name": "acp-pollinations",
+  "version": "1.0.0",
+  "description": "Agent Client Protocol (ACP) coding agent backed by Pollinations",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "pollinations-acp-server": "dist/bin/pollinations-acp-server.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "npm run clean && tsc -p tsconfig.build.json && node -e \"require('fs').chmodSync('dist/bin/pollinations-acp-server.js', 0o755)\"",
+    "watch": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/bin/pollinations-acp-server.js",
+    "models": "tsx scripts/check-catalogue.ts",
+    "test": "vitest run",
+    "tck": "tsx scripts/tck.ts"
+  },
+  "keywords": [
+    "acp",
+    "agent-client-protocol",
+    "coding-agent",
+    "pollinations",
+    "ai"
+  ],
+  "author": "YoannDev90 <yoanndev@outlook.fr>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YoannDev90/acp-pollinations.git"
+  },
+  "homepage": "https://github.com/YoannDev90/acp-pollinations#readme",
+  "bugs": {
+    "url": "https://github.com/YoannDev90/acp-pollinations/issues"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^2.1.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@vitest/coverage-v8": "^5.0.5",
+    "tsx": "^4.23.15",
+    "typescript": "^5.3.3",
+    "vitest": "^5.0.5"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

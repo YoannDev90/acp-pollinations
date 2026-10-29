@@ -1,0 +1,9 @@
+{
+  // The publishable build, kept apart from `tsconfig.json` so that dropping the
+  // tests out of `dist/` does not also drop them out of `npm run typecheck`.
+  // `files` in package.json ships all of `dist/`, and an agent nobody asked for
+  // to run its test suite should not be shipping one.
+  "extends": "./tsconfig.json",
+  "include": ["*.ts", "bin/**/*.ts"],
+  "exclude": ["node_modules", "dist", "tests", "scripts", "vitest.config.ts"]
+}
