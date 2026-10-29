@@ -532,7 +532,8 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
           ...(signal.aborted ? {} : { error: (error as Error).message }),
         });
       }
-      // A reset here would lose the threshold signal and retry every turn.
+      // Resetting to 0 stops a failed compaction from being retried on every
+      // subsequent turn; the current turn's usage report re-arms the threshold.
       session.lastPromptTokens = 0;
     }
   }
