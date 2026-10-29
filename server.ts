@@ -88,11 +88,18 @@ type SessionState = {
  */
 export function createPollinationsAgent(options: CreatePollinationsAgentOptions): AgentApp {
   const { config } = options;
-  const llm = options.llm ?? new PollinationsLlm({
-    apiKey: config.apiKey,
-    baseUrl: config.baseUrl,
-    model: config.model,
-  });
+  // The LLM client requires a key, but `session/new` rejects before any request
+  // is made when one is missing, so the agent can still answer `initialize` and
+  // report a useful error instead of dying at startup.
+  const llm: PollinationsLlm | null =
+    options.llm ??
+    (config.apiKey
+      ? new PollinationsLlm({
+          apiKey: config.apiKey,
+          baseUrl: config.baseUrl,
+          model: config.model,
+        })
+      : null);
 
   const sessions = new Map<string, SessionState>();
   const clientCapabilities = new Map<string, ClientCapabilities | null>();
@@ -547,7 +554,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
 
     let text = "";
     // No tools: a summarising request must never trigger real work.
-    const iterator = llm.chat({ messages: request, model: session.model, signal });
+    const iterator = (llm as PollinationsLlm).chat({ messages: request, model: session.model, signal });
     for (;;) {
       const { done, value } = await iterator.next();
       if (done) break;
@@ -590,7 +597,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
 
     const pendingCalls = new Map<number, { id: string; name: string; arguments: string }>();
     const tools = [...LLM_TOOLS, ...session.mcpToolDefinitions];
-    const iterator = llm.chat({
+    const iterator = (llm as PollinationsLlm).chat({
       messages: session.history,
       tools,
       model: session.model,
