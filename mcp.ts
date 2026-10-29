@@ -5,6 +5,8 @@ import type { ToolKind } from "@agentclientprotocol/sdk";
 import type { LlmToolDefinition } from "./llm.js";
 import type { ToolExecutionResult, ToolContext } from "./tools.js";
 
+const MAX_MCP_OUTPUT_CHARS = 20_000;
+
 export type McpEnvVar = { name: string; value: string };
 
 export type McpServerConfig = {
@@ -192,7 +194,12 @@ export async function connectMcpServer(config: McpServerConfig): Promise<McpConn
             } else if (typeof result === "string") {
               text = result;
             }
-            return { output: text || "(no output)", isError: result?.isError === true };
+            const output = text || "(no output)";
+            const clipped =
+              output.length <= MAX_MCP_OUTPUT_CHARS
+                ? output
+                : `${output.slice(0, MAX_MCP_OUTPUT_CHARS)}\n… output truncated (${output.length} characters total)`;
+            return { output: clipped, isError: result?.isError === true };
           } catch (error) {
             return { output: error instanceof Error ? error.message : String(error), isError: true };
           }
@@ -217,6 +224,11 @@ export async function connectMcpServer(config: McpServerConfig): Promise<McpConn
   }
 
   const close = () => {
+    try {
+      rl.close();
+    } catch {
+      // ignore
+    }
     try {
       child.stdin.end();
     } catch {
