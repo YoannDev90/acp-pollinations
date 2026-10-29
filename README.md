@@ -38,7 +38,7 @@ elicitation, and slash commands.
 ## Requirements
 
 - Node.js >= 22
-- A Pollinations API key (`sk_...`)
+- A Pollinations API key (`sk_...`) — see [Authentication](#authentication)
 
 ## Install and build
 
@@ -63,15 +63,61 @@ stdout stays clean.
 
 ## Authentication
 
-The API key is resolved in this order (see `resolveApiKey`):
+The agent authenticates every chat completion with a Pollinations secret key
+(`sk_...`) in an `Authorization: Bearer` header. The easiest way to get one
+onto a machine is `polli`, the
+[Pollinations CLI](https://gen.pollinations.ai/docs#tag/cli).
+
+### Connect with polli
+
+```sh
+npm install -g @pollinations/cli
+polli auth login
+```
+
+`polli auth login` opens a browser for a device-flow approval. When it returns,
+the key is already written to `~/.pollinations/credentials.json` — that is the
+entire setup; the agent reads that file on its next start. Confirm with:
+
+```sh
+polli auth status
+```
+
+If you already hold a key, skip the browser:
+
+```sh
+printf '%s' "$POLLINATIONS_API_KEY" | polli auth login --with-token
+```
+
+On a machine with no browser — SSH, a container — `polli auth login --no-browser`
+prints the approval URL to open elsewhere instead of trying to open one.
+
+Keys are created and revoked at
+[enter.pollinations.ai/keys](https://enter.pollinations.ai/keys).
+
+### What the agent reads
+
+`resolveApiKey` resolves the key in this order:
 
 1. The `POLLINATIONS_API_KEY` environment variable.
 2. The `apiKey` field of `$POLLINATIONS_HOME/credentials.json`
    (default `~/.pollinations/credentials.json`), as written by `polli auth login`.
 
-If neither yields a key, the agent still answers `initialize` and session setup
-so clients get a useful error rather than a dead process; generation fails at
-`session/new`.
+So one `polli auth login` is enough; export `POLLINATIONS_API_KEY` only to
+override it — a different account, or CI, where the file does not exist.
+
+The agent advertises no ACP `authMethods`, so a client never prompts you for a
+key: authentication belongs to the machine the agent runs on, not to the
+session. Discovery is a separate concern — the `GET /v1/models` request carries
+no `Authorization` header at all, because the catalogue is public — but the
+picker is only handed out by `session/new`, which does require a key.
+
+### Without a key
+
+Nothing dies at startup. The agent answers `initialize` and session setup so a
+client reports something useful rather than a dead process, a warning goes to
+stderr, and `session/new` fails with `-32000`. Run `polli auth login` and
+restart the agent.
 
 ## Configuration
 
