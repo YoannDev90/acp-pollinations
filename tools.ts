@@ -468,7 +468,16 @@ async function editFileTool(
   }
   if (oldText === "") throw new ToolError("`old_text` must not be empty");
 
-  const current = await readLocalFile(path);
+  let current: string;
+  if (ctx.clientCapabilities?.fs?.readTextFile) {
+    const response = await ctx.client.request(methods.client.fs.readTextFile, {
+      sessionId: ctx.sessionId,
+      path,
+    });
+    current = response.content;
+  } else {
+    current = await readLocalFile(path);
+  }
   const occurrences = current.split(oldText).length - 1;
   if (occurrences === 0) throw new ToolError(`\`${truncate(oldText, 80)}\` was not found in ${path}`);
   if (occurrences > 1 && !replaceAll) {
