@@ -127,7 +127,7 @@ All configuration is via environment variables (see `resolveConfig`):
 | --- | --- | --- |
 | `POLLINATIONS_API_KEY` | — | Pollinations secret key. |
 | `POLLINATIONS_BASE_URL` | `https://gen.pollinations.ai` | OpenAI-compatible API base, no trailing slash. |
-| `POLLINATIONS_MODEL` | `community/YoannDev90/vercel-nemotron-3.5-lightning:free` | Model a session starts on; the picker can switch it later. |
+| `POLLINATIONS_MODEL` | `z-ai/glm-5.3-flash` | Model a session starts on; the picker can switch it later. |
 | `ACP_MAX_TURN_REQUESTS` | `24` | Ceiling on model requests within one prompt turn. |
 | `ACP_COMPACTION_THRESHOLD_TOKENS` | `50000` | Prompt tokens at or above which a transcript is summarised; `0` disables compaction. |
 | `ACP_PERMISSION_MODE` | `ask` | `ask` prompts before mutating the workspace; `allow` skips permission requests (CI/demos). |
@@ -151,10 +151,15 @@ Models are grouped by origin and how they are billed:
 | --- | --- |
 | `official-paid` | First-party models with `paid_only: true`. |
 | `official-quest` | First-party models metered in pollen, open to everyone. |
-| `official-free` | First-party models priced at 0 in / 0 out. |
 | `community-paid` | Community models with `paid_only: true`. |
-| `community-quest` | Community models metered in pollen. |
-| `community-free` | Community models priced at 0 in / 0 out. |
+| `community-quest` | Community models metered in pollen, including those that publish no price. |
+| `community-free` | Community models publishing an explicit 0 in / 0 out. |
+
+There is no `official-free` group. First-party models are sold, so an official
+model whose price is absent is metered rather than free: a missing price means
+the price varies, not that it costs nothing. Hand-written `:free` / `:paid`
+suffixes on ids are ignored for the same reason — only the catalogue's own
+numbers are believed.
 
 Switching to a model outside that list is rejected with a `-32602` error naming
 the available ids, so a typo fails loudly instead of mid-turn. The session's own

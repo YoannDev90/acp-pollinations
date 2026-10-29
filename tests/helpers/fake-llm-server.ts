@@ -53,8 +53,9 @@ export type FakeLlmOptions = {
 
 /**
  * A tiny `/v1/models` catalogue: enough to exercise the model picker without a
- * network. Two official quest models and one community-free one, one tool-less
- * model to prove the filter, and one image model to prove the category filter.
+ * network. Two official quest models — one priced, one with amounts missing —
+ * a community model published as explicitly free, plus one tool-less model to
+ * prove the filter and one image model to prove the category filter.
  */
 export const FAKE_MODELS_PAYLOAD = {
   object: "list",
@@ -82,6 +83,18 @@ export const FAKE_MODELS_PAYLOAD = {
       health: { status: "healthy", success_rate: 100, requests: 50 },
     },
     {
+      id: "official/unpriced-d",
+      title: "Unpriced D",
+      description: "Text prices not published",
+      category: "text",
+      community: false,
+      paid_only: false,
+      tools: true,
+      context_length: 128_000,
+      pricing: { currency: "pollen" },
+      health: { status: "healthy", success_rate: 95, requests: 80 },
+    },
+    {
       id: "community/free-c:free",
       title: "Free C",
       description: "Zero-cost community model",
@@ -90,7 +103,7 @@ export const FAKE_MODELS_PAYLOAD = {
       paid_only: false,
       tools: true,
       context_length: 131_072,
-      pricing: { currency: "pollen" },
+      pricing: { currency: "pollen", promptTextTokens: "0", completionTextTokens: "0" },
       health: { status: "degraded", success_rate: 82, requests: 50 },
     },
     {

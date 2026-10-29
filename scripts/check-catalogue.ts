@@ -4,6 +4,7 @@ import {
   buildModelOption,
   fetchModelCatalog,
 } from "../models.js";
+import { DEFAULT_MODEL } from "../config.js";
 
 const models = await fetchModelCatalog({ baseUrl: "https://gen.pollinations.ai" });
 
@@ -13,17 +14,15 @@ const byGroup = new Map<string, number>();
 for (const model of models) byGroup.set(model.group, (byGroup.get(model.group) ?? 0) + 1);
 for (const [group, count] of [...byGroup.entries()].sort()) console.log(`  ${group.padEnd(18)} ${count}`);
 
-const option = buildModelOption(
-  models,
-  "community/YoannDev90/vercel-nemotron-3.5-lightning:free",
-);
+const option = buildModelOption(models, DEFAULT_MODEL);
 
 console.log(`\npicker: id=${option.id} type=${option.type} category=${option.category}`);
 console.log(`currentValue=${option.currentValue}`);
 const groups = option.options as Array<{ group: string; name: string; options: Array<{ value: string; name: string; description?: string | null }> }>;
 console.log(`groups: ${groups.map((g) => `${g.group}(${g.options.length})`).join(", ")}`);
 
-// Is the configured default present, even though it is not in the catalogue?
+// The default is normally listed; a model the catalogue has not caught up
+// with is injected as a placeholder rather than dropped from the picker.
 const flat = groups.flatMap((g) => g.options);
 const current = flat.filter((entry) => entry.value === option.currentValue);
 console.log(`\ncurrent model appears ${current.length} time(s) in the picker`);

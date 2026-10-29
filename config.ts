@@ -5,8 +5,8 @@ import { join } from "node:path";
 /** Default Pollinations API base URL (OpenAI-compatible). */
 export const DEFAULT_BASE_URL = "https://gen.pollinations.ai";
 
-/** Default coding model. Cheap, fast, and supports tool calling. */
-export const DEFAULT_MODEL = "community/YoannDev90/vercel-nemotron-3.5-lightning:free";
+/** Default coding model. Open to everyone, metered in pollen; supports tools. */
+export const DEFAULT_MODEL = "z-ai/glm-5.3-flash";
 
 /** Default ceiling on model requests inside a single prompt turn. */
 export const DEFAULT_MAX_TURN_REQUESTS = 24;

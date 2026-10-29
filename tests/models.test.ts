@@ -14,11 +14,13 @@ import {
   buildModelOption,
   classifyTier,
   fetchModelCatalog,
+  groupOf,
   inferGroup,
   isKnownModel,
   parseModelCatalog,
 } from "../models.js";
 import type { CatalogModel } from "../models.js";
+import { DEFAULT_MODEL } from "../config.js";
 import {
   FAKE_MODELS_PAYLOAD,
   startFakeLlmServer,
@@ -80,10 +82,12 @@ describe("classifyTier", () => {
     ).toBe("paid");
   });
 
-  it("treats zero in / zero out as free", () => {
-    expect(classifyTier({ paid_only: false, pricing: {} })).toBe("free");
+  it("treats an explicit zero in / zero out as free", () => {
     expect(
       classifyTier({ paid_only: false, pricing: { promptTextTokens: "0", completionTextTokens: "0" } }),
+    ).toBe("free");
+    expect(
+      classifyTier({ paid_only: false, pricing: { promptTextTokens: 0, completionTextTokens: 0 } }),
     ).toBe("free");
   });
 
@@ -96,22 +100,44 @@ describe("classifyTier", () => {
     ).toBe("quest");
   });
 
-  it("treats absent pricing as free, matching the catalogue's :free models", () => {
-    // Pollinations publishes free models with no amounts at all in `pricing`
-    // (e.g. `community/...:free`), so "no price" must read as zero, not unknown.
+  it("treats absent pricing as quest, because an unstated price varies", () => {
+    // A missing amount is not a zero: nobody promised it costs nothing. The
+    // live catalogue publishes 143 models with no text amounts at all, and
+    // calling them free would be inventing a price.
     expect(
       classifyTier({ paid_only: false, pricing: { promptTextTokens: null, completionTextTokens: null } }),
-    ).toBe("free");
-    expect(classifyTier({ paid_only: false, pricing: undefined })).toBe("free");
-    expect(classifyTier({ paid_only: false })).toBe("free");
+    ).toBe("quest");
+    expect(classifyTier({ paid_only: false, pricing: undefined })).toBe("quest");
+    expect(classifyTier({ paid_only: false, pricing: {} })).toBe("quest");
+    expect(classifyTier({ paid_only: false })).toBe("quest");
+  });
+});
+
+describe("groupOf", () => {
+  it("never places an official model in a free group", () => {
+    const produced = new Set<string>([
+      groupOf("official", "paid"),
+      groupOf("official", "quest"),
+      groupOf("official", "free"),
+      groupOf("community", "paid"),
+      groupOf("community", "quest"),
+      groupOf("community", "free"),
+    ]);
+
+    expect(produced.has("official-free")).toBe(false);
+    expect(produced).toEqual(new Set(MODEL_GROUP_ORDER));
   });
 });
 
 describe("inferGroup", () => {
-  it("maps the origin and the :free / :paid suffix", () => {
-    expect(inferGroup("community/YoannDev90/vercel-nemotron-3.5-lightning:free")).toBe("community-free");
+  it("reads only the origin, ignoring the hand-written :free / :paid suffix", () => {
     expect(inferGroup("nvidia/nemotron-3.5-lightning")).toBe("official-quest");
-    expect(inferGroup("community/x/some-model:paid")).toBe("community-paid");
+    expect(inferGroup("community/Catniti/nemotron-3.5-lightning")).toBe("community-quest");
+    // Suffixes are typed by whoever published the model, not reported by the
+    // API, so a `:free` id is not enough to claim the model costs nothing.
+    expect(inferGroup("community/YoannDev90/vercel-nemotron-3.5-lightning:free")).toBe("community-quest");
+    expect(inferGroup("community/x/some-model:paid")).toBe("community-quest");
+    expect(inferGroup("openai/some-model:free")).toBe("official-quest");
   });
 });
 
@@ -125,11 +151,15 @@ describe("parseModelCatalog", () => {
       "community/free-c:free",
       "official/paid-b",
       "official/quest-a",
+      "official/unpriced-d",
     ]);
 
     expect(byId.get("official/quest-a")?.group).toBe("official-quest");
     expect(byId.get("official/paid-b")?.group).toBe("official-paid");
     expect(byId.get("community/free-c:free")?.group).toBe("community-free");
+    // An official model with no published text price is quest, never free:
+    // `official-free` is not a group the picker can emit.
+    expect(byId.get("official/unpriced-d")?.group).toBe("official-quest");
   });
 
   it("sorts by group order, then success rate, then request volume", () => {
@@ -137,6 +167,7 @@ describe("parseModelCatalog", () => {
     expect(models.map((entry) => entry.id)).toEqual([
       "official/paid-b",
       "official/quest-a",
+      "official/unpriced-d",
       "community/free-c:free",
     ]);
   });
@@ -242,6 +273,7 @@ describe("fetchModelCatalog", () => {
       expect(models.map((entry) => entry.id)).toEqual([
         "official/paid-b",
         "official/quest-a",
+        "official/unpriced-d",
         "community/free-c:free",
       ]);
     } finally {
@@ -278,13 +310,21 @@ describe("fetchModelCatalog", () => {
 
 describe("FALLBACK_MODELS", () => {
   it("offers the configured default so an offline picker still works", () => {
-    expect(FALLBACK_MODELS.some((entry) => entry.id.includes("vercel-nemotron-3.5-lightning"))).toBe(true);
+    expect(FALLBACK_MODELS.some((entry) => entry.id === DEFAULT_MODEL)).toBe(true);
   });
 
   it("spans both origins and more than one tier", () => {
-    const groups = new Set(FALLBACK_MODELS.map((entry) => entry.group));
+    const groups = [...new Set(FALLBACK_MODELS.map((entry) => entry.group))];
 
-    expect(groups.has("community-free")).toBe(true);
-    expect([...groups].every((group) => MODEL_GROUP_ORDER.includes(group))).toBe(true);
+    expect(groups.some((group) => group.startsWith("official"))).toBe(true);
+    expect(groups.some((group) => group.startsWith("community"))).toBe(true);
+    expect(groups.some((group) => group.endsWith("-paid"))).toBe(true);
+    expect(groups.some((group) => group.endsWith("-quest"))).toBe(true);
+    expect(groups.every((group) => MODEL_GROUP_ORDER.includes(group))).toBe(true);
+  });
+
+  it("claims no free tier it cannot verify offline", () => {
+    // The fallback carries no pricing, so it must not promise free models.
+    expect(FALLBACK_MODELS.some((entry) => entry.group.endsWith("-free"))).toBe(false);
   });
 });

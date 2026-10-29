@@ -10,12 +10,14 @@ import type { SessionConfigOption, SessionConfigSelectOption } from "@agentclien
  *
  * Classification is the operator's rule of thumb over the `/v1/models` fields:
  *
- * - `paid`   — `paid_only: true`, requires pollen.
- * - `free`   — priced at 0 in / 0 out.
+ * - `paid`   — `paid_only: true`, requires purchased pollen.
+ * - `free`   — 0 in / 0 out *published explicitly*. Absent amounts do not count:
+ *              an unstated price varies, and varying prices are `quest`.
  * - `quest`  — everything else: open to everyone, metered pollen.
  *
- * Combined with the model's origin this yields the picker groups
- * `official|community` × `paid|quest|free`.
+ * Combined with the model's origin this yields five picker groups, not six:
+ * `official-free` cannot occur. First-party models are sold, and nothing in the
+ * catalogue ever marks one complimentary, so the type forbids it outright.
  */
 
 /** `configId` of the model picker, as sent in `session/set_config_option`. */
@@ -24,10 +26,24 @@ export const MODEL_CONFIG_ID = "model";
 /** How long a fetched catalogue is reused before being refreshed. */
 export const MODEL_CATALOG_TTL_MS = 5 * 60_000;
 
+/** Where the model is published: Pollinations' own, or a community author's. */
+export type Origin = "official" | "community";
+
 export type PricingTier = "paid" | "quest" | "free";
 
-/** Picker group: where the model comes from, then how it is billed. */
-export type ModelGroup = `${"official" | "community"}-${PricingTier}`;
+/**
+ * Picker group: where the model comes from, then how it is billed.
+ *
+ * Deliberately not `` `${Origin}-${PricingTier}` ``: that cross product would
+ * include `official-free`, which the rules above rule out. Writing the five
+ * groups out lets the compiler reject one if it ever creeps back in.
+ */
+export type ModelGroup =
+  | "official-paid"
+  | "official-quest"
+  | "community-paid"
+  | "community-quest"
+  | "community-free";
 
 /** One model that a session can be switched to. */
 export type CatalogModel = {
@@ -53,7 +69,6 @@ export type CatalogModel = {
 export const MODEL_GROUP_ORDER: readonly ModelGroup[] = [
   "official-paid",
   "official-quest",
-  "official-free",
   "community-paid",
   "community-quest",
   "community-free",
@@ -62,7 +77,6 @@ export const MODEL_GROUP_ORDER: readonly ModelGroup[] = [
 const GROUP_LABELS: Record<ModelGroup, string> = {
   "official-paid": "Official · paid",
   "official-quest": "Official · quest",
-  "official-free": "Official · free",
   "community-paid": "Community · paid",
   "community-quest": "Community · quest",
   "community-free": "Community · free",
@@ -80,7 +94,7 @@ export const FALLBACK_MODELS: readonly CatalogModel[] = [
     id: "community/YoannDev90/vercel-nemotron-3.5-lightning:free",
     title: "Vercel Nemotron 3.5 Lightning",
     description: "offline fallback list",
-    group: "community-free",
+    group: "community-quest",
     contextLength: null,
     promptPrice: null,
     completionPrice: null,
@@ -258,25 +272,45 @@ export function isKnownModel(models: readonly CatalogModel[], id: string): boole
   return models.some((model) => model.id === id);
 }
 
-/** Groups a bare model id when the live catalogue is unavailable. */
-export function inferGroup(id: string): ModelGroup {
-  const origin = id.startsWith("community/") ? "community" : "official";
-  const tier: PricingTier = id.endsWith(":free")
-    ? "free"
-    : id.endsWith(":paid")
-      ? "paid"
-      : "quest";
-  return `${origin}-${tier}`;
+/**
+ * Combines a model's origin with its billing tier.
+ *
+ * The only rule here that is not a plain join: an `official` model can never be
+ * `free`, so that tier degrades to `quest`.
+ */
+export function groupOf(origin: Origin, tier: PricingTier): ModelGroup {
+  if (origin === "official") return tier === "paid" ? "official-paid" : "official-quest";
+  if (tier === "paid") return "community-paid";
+  if (tier === "free") return "community-free";
+  return "community-quest";
 }
 
-/** Billing tier of one entry, per the `paid` / `free` / `quest` rule. */
+/**
+ * Groups a bare model id when the live catalogue is unavailable.
+ *
+ * Only the id is known here, and its `:free` / `:paid` suffixes are typed by
+ * whoever published the model rather than reported by the API, so they carry no
+ * weight. An unknown model is assumed open to everyone: `quest`.
+ */
+export function inferGroup(id: string): ModelGroup {
+  const origin: Origin = id.startsWith("community/") ? "community" : "official";
+  return groupOf(origin, "quest");
+}
+
+/**
+ * Billing tier of one entry, per the `paid` / `free` / `quest` rule.
+ *
+ * `free` needs the catalogue to publish an explicit 0 in / 0 out. Amounts that
+ * are simply absent mean the price varies, and varying prices are `quest`:
+ * calling an unstated price "free" would be a promise nobody made.
+ */
 export function classifyTier(entry: {
   paid_only?: unknown;
   pricing?: { promptTextTokens?: unknown; completionTextTokens?: unknown } | null;
 }): PricingTier {
   if (entry.paid_only === true) return "paid";
-  const prompt = numberOr(entry.pricing?.promptTextTokens, 0);
-  const completion = numberOr(entry.pricing?.completionTextTokens, 0);
+  const prompt = numberOr(entry.pricing?.promptTextTokens, null);
+  const completion = numberOr(entry.pricing?.completionTextTokens, null);
   return prompt === 0 && completion === 0 ? "free" : "quest";
 }
 
@@ -326,14 +360,13 @@ function toCatalogModel(entry: RawModelEntry): CatalogModel | null {
     : [];
   if (entry.tools !== true && !capabilities.includes("tool_calling")) return null;
 
-  const community = entry.community === true;
-  const origin = community ? "community" : "official";
+  const origin: Origin = entry.community === true ? "community" : "official";
 
   return {
     id,
     title: textOf(entry.title) || id,
     description: textOf(entry.description),
-    group: `${origin}-${classifyTier(entry)}`,
+    group: groupOf(origin, classifyTier(entry)),
     contextLength: positiveInt(entry.context_length),
     promptPrice: priceOf(entry.pricing?.promptTextTokens),
     completionPrice: priceOf(entry.pricing?.completionTextTokens),
