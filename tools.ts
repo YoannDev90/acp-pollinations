@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
-import { glob, open, readFile, readdir, stat, writeFile, mkdir } from "node:fs/promises";
-import { dirname, resolve, sep } from "node:path";
+import { glob, open, readFile, readdir, stat, writeFile, mkdir, realpath } from "node:fs/promises";
+import { basename, dirname, resolve, sep } from "node:path";
 
 import type { AgentContext, ClientCapabilities, ToolKind } from "@agentclientprotocol/sdk";
 import { methods } from "@agentclientprotocol/sdk";
@@ -298,22 +298,60 @@ export async function executeTool(
  * ------------------------------------------------------------------ */
 
 /** Resolves a path and enforces the session's workspace root set. */
-function resolveInRoots(path: unknown, ctx: ToolContext): string {
+async function resolveInRoots(path: unknown, ctx: ToolContext): Promise<string> {
   if (typeof path !== "string" || path.trim() === "") {
     throw new ToolError("A non-empty `path` is required");
   }
 
   const absolute = resolve(ctx.cwd, path);
-  const allowed = ctx.roots.some((root) => {
+
+  // Lexical check first, so traversal via `..` is rejected before any I/O.
+  const lexicallyAllowed = ctx.roots.some((root) => {
     const base = resolve(root);
     return absolute === base || absolute.startsWith(base.endsWith(sep) ? base : base + sep);
   });
-
-  if (!allowed) {
+  if (!lexicallyAllowed) {
     throw new ToolError(
       `Refusing to access ${absolute}: it is outside the session workspace (${ctx.roots.join(", ")})`,
     );
   }
+
+  // Resolve symlinks so a link inside the workspace cannot point outside it.
+  // Missing targets are allowed (they may be created by write_file): their
+  // parent directory must still be inside the workspace.
+  const realRoots = await Promise.all(
+    ctx.roots.map(async (root) => {
+      try {
+        return await realpath(resolve(root));
+      } catch {
+        return resolve(root);
+      }
+    }),
+  );
+
+  let realAbsolute: string;
+  try {
+    realAbsolute = await realpath(absolute);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") throw error;
+    try {
+      const parent = await realpath(dirname(absolute));
+      realAbsolute = resolve(parent, basename(absolute));
+    } catch {
+      return absolute;
+    }
+  }
+
+  const reallyAllowed = realRoots.some((root) => {
+    return realAbsolute === root || realAbsolute.startsWith(root.endsWith(sep) ? root : root + sep);
+  });
+  if (!reallyAllowed) {
+    throw new ToolError(
+      `Refusing to access ${absolute}: it resolves outside the session workspace (${ctx.roots.join(", ")})`,
+    );
+  }
+
   return absolute;
 }
 
@@ -339,7 +377,7 @@ async function readFileTool(
   input: Record<string, unknown>,
   ctx: ToolContext,
 ): Promise<ToolExecutionResult> {
-  const path = resolveInRoots(input.path, ctx);
+  const path = await resolveInRoots(input.path, ctx);
   const line = typeof input.line === "number" ? input.line : undefined;
   const limit = typeof input.limit === "number" ? input.limit : undefined;
 
@@ -392,7 +430,7 @@ async function writeFileTool(
   input: Record<string, unknown>,
   ctx: ToolContext,
 ): Promise<ToolExecutionResult> {
-  const path = resolveInRoots(input.path, ctx);
+  const path = await resolveInRoots(input.path, ctx);
   const content = typeof input.content === "string" ? input.content : null;
   if (content === null) throw new ToolError("A string `content` is required");
 
@@ -420,7 +458,7 @@ async function editFileTool(
   input: Record<string, unknown>,
   ctx: ToolContext,
 ): Promise<ToolExecutionResult> {
-  const path = resolveInRoots(input.path, ctx);
+  const path = await resolveInRoots(input.path, ctx);
   const oldText = typeof input.old_text === "string" ? input.old_text : null;
   const newText = typeof input.new_text === "string" ? input.new_text : null;
   const replaceAll = input.replace_all === true;
@@ -474,7 +512,7 @@ async function listDirTool(
   input: Record<string, unknown>,
   ctx: ToolContext,
 ): Promise<ToolExecutionResult> {
-  const path = input.path === undefined ? resolve(ctx.cwd) : resolveInRoots(input.path, ctx);
+  const path = input.path === undefined ? resolve(ctx.cwd) : await resolveInRoots(input.path, ctx);
 
   let entries;
   try {
@@ -503,7 +541,7 @@ async function globTool(
   const pattern = typeof input.pattern === "string" ? input.pattern.trim() : "";
   if (!pattern) throw new ToolError("A non-empty `pattern` is required");
 
-  const root = input.path === undefined ? resolve(ctx.cwd) : resolveInRoots(input.path, ctx);
+  const root = input.path === undefined ? resolve(ctx.cwd) : await resolveInRoots(input.path, ctx);
   const matches: string[] = [];
 
   // `fs.promises.glob` walks the tree for us; `exclude` keeps vendored and
@@ -535,7 +573,7 @@ async function grepTool(
     throw new ToolError(`Invalid regular expression: ${(error as Error).message}`);
   }
 
-  const root = input.path === undefined ? resolve(ctx.cwd) : resolveInRoots(input.path, ctx);
+  const root = input.path === undefined ? resolve(ctx.cwd) : await resolveInRoots(input.path, ctx);
   const include = typeof input.include === "string" && input.include ? globToRegExp(input.include) : null;
   const limit = typeof input.limit === "number" && input.limit > 0 ? Math.min(input.limit, 200) : MAX_MATCHES;
 
