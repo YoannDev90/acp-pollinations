@@ -710,9 +710,13 @@ async function runViaClientTerminal(command: string, ctx: ToolContext): Promise<
 /** Fallback for clients without the `terminal` capability. */
 function runLocally(command: string, ctx: ToolContext): Promise<CommandResult> {
   return new Promise((resolvePromise) => {
+    // Do not hand the Pollinations secret (or any other credential) to the
+    // child: a prompt-injected command must not be able to exfiltrate it.
+    const env = { ...process.env };
+    delete env.POLLINATIONS_API_KEY;
     const child = spawn("/bin/sh", ["-c", command], {
       cwd: ctx.cwd,
-      env: process.env,
+      env,
       stdio: ["ignore", "pipe", "pipe"],
     });
 
