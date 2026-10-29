@@ -928,7 +928,24 @@ let connectionCounter = 0;
  * crash.
  */
 function connectionKey(client: AgentContext): string {
-  const identity = ((client as unknown as { cx?: unknown }).cx ?? client) as object;
+  // Identify the connection behind an ACP context. The SDK keeps it behind a
+  // symbol-keyed method; find that symbol instead of hard-coding `cx`, so a
+  // renamed field does not silently break capability lookup.
+  let identity: object = client as object;
+  try {
+    const symbol = [
+      ...Object.getOwnPropertySymbols(client),
+      ...Object.getOwnPropertySymbols(Object.getPrototypeOf(client) ?? {}),
+    ].find((candidate) => candidate.toString().includes("connectionContextOf"));
+    if (symbol) {
+      const context = (client as unknown as Record<symbol, () => unknown>)[symbol];
+      if (typeof context === "function") identity = context.call(client) as object;
+    } else {
+      identity = ((client as unknown as { cx?: unknown }).cx ?? client) as object;
+    }
+  } catch {
+    identity = ((client as unknown as { cx?: unknown }).cx ?? client) as object;
+  }
 
   let key = connectionIds.get(identity);
   if (!key) {
