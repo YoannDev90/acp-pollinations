@@ -421,6 +421,230 @@ export async function connectHttpMcpServer(config: McpServerConfig): Promise<Mcp
   return { name: serverName as string, tools, bindings, toolDefinitions, close };
 }
 
+export async function connectSseMcpServer(config: McpServerConfig): Promise<McpConnection> {
+  const serverName = config.name?.trim() || config.url || "mcp-sse";
+  const url = config.url as string;
+  const baseHeaders = headersToRecord(config.headers);
+
+  const controller = new AbortController();
+  const response = await fetch(url, {
+    method: "GET",
+    headers: { Accept: "text/event-stream", ...baseHeaders },
+    signal: controller.signal,
+  });
+
+  if (!response.ok || !response.body) {
+    throw new Error(`MCP SSE connection failed (${response.status})`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let postUrl: string | null = null;
+  let endpointReady: (() => void) | null = null;
+  const endpointPromise = new Promise<void>((resolve) => {
+    endpointReady = resolve;
+  });
+
+  const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
+
+  const pump = (async () => {
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let idx: number;
+        while ((idx = buffer.indexOf("\\n\\n")) !== -1) {
+          const frame = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
+
+          let event = "message";
+          const dataLines: string[] = [];
+          for (const line of frame.split(/\\r?\\n/)) {
+            if (line.startsWith("event:")) event = line.slice(6).trim();
+            else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+          }
+          const data = dataLines.join("\\n");
+
+          if (event === "endpoint" && data) {
+            postUrl = new URL(data, url).toString();
+            if (endpointReady) {
+              const ready = endpointReady as () => void;
+              endpointReady = null;
+              ready();
+            }
+            continue;
+          }
+
+          if (!data) continue;
+          try {
+            const parsed = JSON.parse(data) as { id?: number; result?: unknown; error?: { message?: string } };
+            if (parsed.id !== undefined && pending.has(parsed.id)) {
+              const request = pending.get(parsed.id)!;
+              pending.delete(parsed.id);
+              if (parsed.error) request.reject(new Error(parsed.error.message ?? "MCP request failed"));
+              else request.resolve(parsed.result);
+            }
+          } catch {
+            // ignore non-JSON frames
+          }
+        }
+      }
+    } catch (error) {
+      for (const request of pending.values()) {
+        request.reject(error instanceof Error ? error : new Error(String(error)));
+      }
+      pending.clear();
+    }
+  })();
+
+  // Wait for the endpoint event (with a timeout).
+  const endpointTimeout = setTimeout(() => {
+    if (endpointReady) {
+      endpointReady = null;
+      // reject all pending? none yet
+    }
+  }, 10_000);
+  await endpointPromise;
+  clearTimeout(endpointTimeout);
+
+  if (!postUrl) throw new Error("MCP SSE server did not send an endpoint");
+
+  let nextId = 1;
+
+  async function send(method: string, params: Record<string, unknown> | null): Promise<unknown> {
+    const id = nextId++;
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...baseHeaders,
+    };
+    const response = await fetch(postUrl as string, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ jsonrpc: "2.0", id, method, params: params ?? {} }),
+    });
+    if (!response.ok) {
+      throw new Error(`MCP request "${method}" failed (${response.status})`);
+    }
+
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error(`MCP request "${method}" timed out`));
+      }, 30_000);
+      pending.set(id, {
+        resolve: (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
+    });
+  }
+
+  const tools: McpTool[] = [];
+  const bindings = new Map<string, McpToolBinding>();
+  const toolDefinitions: LlmToolDefinition[] = [];
+
+  try {
+    await send("initialize", {
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "acp-pollinations", version: "1.0.0" },
+    });
+
+    const rawTools: unknown[] = [];
+    let cursor: string | undefined;
+    do {
+      const listed = (await send("tools/list", cursor ? { cursor } : {})) as
+        | { tools?: unknown; nextCursor?: unknown }
+        | null;
+      if (Array.isArray(listed?.tools)) rawTools.push(...(listed.tools as unknown[]));
+      cursor = typeof listed?.nextCursor === "string" ? listed.nextCursor : undefined;
+    } while (cursor);
+
+    for (const raw of rawTools) {
+      if (typeof raw !== "object" || raw === null) continue;
+      const tool = raw as McpTool;
+      if (typeof tool.name !== "string" || tool.name.length === 0) continue;
+      tools.push(tool);
+
+      const bindingName = tool.name;
+      const readOnly = tool.annotations?.readOnlyHint === true;
+      const mutating = !readOnly;
+      const kind: ToolKind = readOnly ? "read" : "other";
+      const parameters =
+        typeof tool.inputSchema === "object" && tool.inputSchema !== null
+          ? (tool.inputSchema as Record<string, unknown>)
+          : { type: "object", properties: {} };
+
+      const binding: McpToolBinding = {
+        name: bindingName,
+        kind,
+        mutating,
+        title: (input) => `${serverName}: ${tool.name}`,
+        call: async (input) => {
+          try {
+            const result = (await send("tools/call", {
+              name: tool.name,
+              arguments: input,
+            })) as { content?: unknown; isError?: boolean } | null;
+            let text = "";
+            if (Array.isArray(result?.content)) {
+              text = (result.content as Array<{ type?: string; text?: string }>)
+                .map((entry) => (entry?.type === "text" ? String(entry.text ?? "") : JSON.stringify(entry)))
+                .join("\\n");
+            } else if (result && typeof result === "object") {
+              text = JSON.stringify(result);
+            } else if (typeof result === "string") {
+              text = result;
+            }
+            const output = text || "(no output)";
+            const clipped =
+              output.length <= MAX_MCP_OUTPUT_CHARS
+                ? output
+                : `${output.slice(0, MAX_MCP_OUTPUT_CHARS)}\\n… output truncated (${output.length} characters total)`;
+            return { output: clipped, isError: result?.isError === true };
+          } catch (error) {
+            return { output: error instanceof Error ? error.message : String(error), isError: true };
+          }
+        },
+      };
+
+      bindings.set(bindingName, binding);
+      toolDefinitions.push({
+        type: "function",
+        function: {
+          name: bindingName,
+          description: tool.description ?? `MCP tool ${tool.name} from ${serverName}`,
+          parameters,
+        },
+      });
+    }
+  } catch (error) {
+    process.stderr.write(
+      `${serverName}: MCP SSE connection failed (${error instanceof Error ? error.message : String(error)})\\n`,
+    );
+  }
+
+  const close = () => {
+    controller.abort();
+    for (const request of pending.values()) {
+      request.reject(new Error("MCP server closed"));
+    }
+    pending.clear();
+  };
+
+  // Avoid unhandled rejection from the background pump.
+  void pump.catch(() => undefined);
+
+  return { name: serverName, tools, bindings, toolDefinitions, close };
+}
+
 export function isStdioMcpServer(value: unknown): value is McpServerConfig {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
@@ -467,9 +691,11 @@ export async function connectMcpServers(servers: unknown[]): Promise<McpConnecti
     if (!config) continue;
     try {
       const connection =
-        config.type === "http" || config.type === "sse"
-          ? await connectHttpMcpServer(config)
-          : await connectMcpServer(config);
+        config.type === "sse"
+          ? await connectSseMcpServer(config)
+          : config.type === "http"
+            ? await connectHttpMcpServer(config)
+            : await connectMcpServer(config);
       connections.push(connection);
     } catch (error) {
       const target =
