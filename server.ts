@@ -12,6 +12,7 @@ import type {
   AgentContext,
   ClientCapabilities,
   ContentBlock,
+  SessionConfigOption,
   PromptResponse,
   ToolCallContent,
   ToolKind,
@@ -44,6 +45,16 @@ export const AGENT_NAME = "pollinations";
 export const AGENT_TITLE = "Pollinations";
 export const AGENT_VERSION = "1.0.0";
 
+/** Config option id for the reasoning/thought-level selector. */
+const REASONING_CONFIG_ID = "reasoning";
+
+const REASONING_LEVELS: ReadonlyArray<{ value: string; name: string }> = [
+  { value: "none", name: "None" },
+  { value: "low", name: "Low" },
+  { value: "medium", name: "Medium" },
+  { value: "high", name: "High" },
+];
+
 export type CreatePollinationsAgentOptions = {
   config: AgentConfig;
   /** Injected LLM, for tests. Defaults to a real Pollinations client. */
@@ -64,6 +75,8 @@ type SessionState = {
   history: LlmMessage[];
   /** Model chosen through the ACP model picker, or the configured default. */
   model: string;
+  /** Reasoning effort chosen through the ACP reasoning selector. */
+  reasoningLevel: string;
   /** Tools permanently allowed via an `allow_always` permission outcome. */
   allowedTools: Set<ToolName>;
   /** Aborts the in-flight prompt turn when the client cancels. */
@@ -197,6 +210,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       roots,
       history: [systemMessage(roots[0] as string)],
       model,
+      reasoningLevel: "medium",
       allowedTools: new Set(),
       abort: null,
       messageCounter: 0,
@@ -224,7 +238,13 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     await persist(session);
 
     // The picker is what lets the client switch models mid-session.
-    return { sessionId, configOptions: [buildModelOption(await modelCatalog(), model)] };
+    return {
+      sessionId,
+      configOptions: [
+        buildModelOption(await modelCatalog(), model),
+        buildReasoningOption("medium"),
+      ],
+    };
   });
 
   /**
@@ -249,7 +269,13 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
 
     // Still warm from an earlier turn in this process: nothing to restore.
     const live = sessions.get(sessionId);
-    if (live) return { configOptions: [buildModelOption(await modelCatalog(), live.model)] };
+    if (live)
+      return {
+        configOptions: [
+          buildModelOption(await modelCatalog(), live.model),
+          buildReasoningOption(live.reasoningLevel),
+        ],
+      };
 
     const stored = await store.load(sessionId);
     if (!stored) throw RequestError.sessionNotFound(sessionId);
@@ -272,6 +298,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       roots: loadedRoots,
       history: rebaseHistory(stored.history, root, stored.cwd),
       model: stored.model,
+      reasoningLevel: stored.reasoningLevel ?? "medium",
       allowedTools: new Set(stored.allowedTools as ToolName[]),
       abort: null,
       messageCounter: stored.messageCounter,
@@ -312,7 +339,12 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       }
     }
 
-    return { configOptions: [buildModelOption(await modelCatalog(), session.model)] };
+    return {
+      configOptions: [
+        buildModelOption(await modelCatalog(), session.model),
+        buildReasoningOption(session.reasoningLevel),
+      ],
+    };
   });
 
   /* ---------------------------------------------------------------- *
@@ -369,33 +401,56 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     if (!session) throw RequestError.sessionNotFound(ctx.params.sessionId);
 
     const { configId, value } = ctx.params;
-    if (configId !== MODEL_CONFIG_ID) {
-      throw RequestError.invalidParams(
-        { configId, value },
-        `Unknown config option "${configId}". This agent only exposes "${MODEL_CONFIG_ID}".`,
-      );
-    }
-    if (typeof value !== "string" || value.length === 0) {
-      throw RequestError.invalidParams(
-        { configId, value },
-        `"${MODEL_CONFIG_ID}" takes a model id string.`,
-      );
+
+    if (configId === MODEL_CONFIG_ID) {
+      if (typeof value !== "string" || value.length === 0) {
+        throw RequestError.invalidParams(
+          { configId, value },
+          `"${MODEL_CONFIG_ID}" takes a model id string.`,
+        );
+      }
+
+      const models = await modelCatalog();
+      if (!isKnownModel(models, value) && value !== session.model) {
+        throw RequestError.invalidParams(
+          { configId, value, available: models.map((model) => model.id) },
+          `Unknown model "${value}". Pick one of the ${models.length} models offered by "${MODEL_CONFIG_ID}".`,
+        );
+      }
+
+      session.model = value;
+      await persist(session);
+      return {
+        configOptions: [
+          buildModelOption(models, value),
+          buildReasoningOption(session.reasoningLevel),
+        ],
+      };
     }
 
-    const models = await modelCatalog();
-    // The session's own model is always rendered in the picker — `buildModelOption`
-    // injects it when the catalogue does not list it — so it stays re-selectable.
-    if (!isKnownModel(models, value) && value !== session.model) {
-      throw RequestError.invalidParams(
-        { configId, value, available: models.map((model) => model.id) },
-        `Unknown model "${value}". Pick one of the ${models.length} models offered by "${MODEL_CONFIG_ID}".`,
-      );
+    if (configId === REASONING_CONFIG_ID) {
+      if (typeof value !== "string" || !REASONING_LEVELS.some((level) => level.value === value)) {
+        throw RequestError.invalidParams(
+          { configId, value, available: REASONING_LEVELS.map((level) => level.value) },
+          `Unknown reasoning level "${value}".`,
+        );
+      }
+
+      session.reasoningLevel = value;
+      await persist(session);
+      const models = await modelCatalog();
+      return {
+        configOptions: [
+          buildModelOption(models, session.model),
+          buildReasoningOption(value),
+        ],
+      };
     }
 
-    session.model = value;
-    await persist(session);
-    // The response must carry the full, current option set.
-    return { configOptions: [buildModelOption(models, value)] };
+    throw RequestError.invalidParams(
+      { configId, value },
+      `Unknown config option "${configId}". This agent only exposes "${MODEL_CONFIG_ID}" and "${REASONING_CONFIG_ID}".`,
+    );
   });
 
   app.onNotification(methods.agent.session.cancel, (ctx) => {
@@ -487,6 +542,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       cwd: session.cwd,
       roots: session.roots,
       model: session.model,
+      reasoningLevel: session.reasoningLevel,
       allowedTools: [...session.allowedTools],
       messageCounter: session.messageCounter,
       lastPromptTokens: session.lastPromptTokens,
@@ -983,6 +1039,21 @@ function toToolCallContent(result: ToolExecutionResult): ToolCallContent[] {
   content.push({ type: "content", content: { type: "text", text: result.output } });
 
   return content;
+}
+
+function buildReasoningOption(current: string): SessionConfigOption {
+  return {
+    type: "select",
+    id: REASONING_CONFIG_ID,
+    name: "Reasoning",
+    description: "Reasoning effort used by the model",
+    category: "thought_level",
+    currentValue: current,
+    options: REASONING_LEVELS.map((level) => ({
+      value: level.value,
+      name: level.name,
+    })),
+  };
 }
 
 function toRequestError(error: unknown): RequestError {
