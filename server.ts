@@ -71,6 +71,8 @@ type SessionState = {
   messageCounter: number;
   /** Prompt tokens of the last model request, as reported by the provider. */
   lastPromptTokens: number;
+  /** Cumulative estimated cost of the session in pollen. */
+  costSoFar: number;
   /** Live MCP connections for this session. */
   mcpConnections: McpConnection[];
   /** MCP tool bindings keyed by the name exposed to the model. */
@@ -199,6 +201,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       abort: null,
       messageCounter: 0,
       lastPromptTokens: 0,
+      costSoFar: 0,
       mcpConnections: [],
       mcpTools: new Map(),
       mcpToolDefinitions: [],
@@ -268,6 +271,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       abort: null,
       messageCounter: stored.messageCounter,
       lastPromptTokens: stored.lastPromptTokens,
+      costSoFar: 0,
       mcpConnections: [],
       mcpTools: new Map(),
       mcpToolDefinitions: [],
@@ -643,15 +647,28 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     if (usage) {
       const models = await modelCatalog();
       const info = models.find((model) => model.id === session.model);
-      const cost =
+      const incrementalCost =
         info && info.promptPrice !== null && info.completionPrice !== null
           ? usage.promptTokens * info.promptPrice + usage.completionTokens * info.completionPrice
           : null;
+      if (incrementalCost !== null) session.costSoFar += incrementalCost;
+
       process.stderr.write(
         `${AGENT_TITLE}: usage session=${session.id} model=${session.model} ` +
           `prompt=${usage.promptTokens} completion=${usage.completionTokens} ` +
-          `cost=${cost === null ? "unknown" : cost.toFixed(6)} pollen\n`,
+          `cost=${incrementalCost === null ? "unknown" : incrementalCost.toFixed(6)} pollen ` +
+          `(session total ${session.costSoFar.toFixed(6)})\n`,
       );
+
+      // Report context usage and cumulative cost to clients that render them.
+      await notify({
+        sessionUpdate: "usage_update",
+        used: usage.promptTokens,
+        size: info?.contextLength ?? 0,
+        ...(session.costSoFar > 0
+          ? { cost: { amount: session.costSoFar, currency: "pollen" } }
+          : {}),
+      });
     }
 
     if (signal.aborted) return { kind: "cancelled" };
