@@ -34,6 +34,8 @@ import { createSessionStore } from "./sessions.js";
 import type { PersistedSession } from "./sessions.js";
 import { LLM_TOOLS, TOOL_DEFINITIONS, ToolError, executeTool } from "./tools.js";
 import { promptToText, rebaseHistory, systemMessage } from "./messages.js";
+import type { SessionState } from "./session-state.js";
+import { createSessionState } from "./session-state.js";
 import type { ToolContext, ToolExecutionResult, ToolName } from "./tools.js";
 import {
   connectMcpServers,
@@ -91,37 +93,6 @@ export type CreatePollinationsAgentOptions = {
   catalogTtlMs?: number;
 };
 
-type SessionState = {
-  id: string;
-  cwd: string;
-  roots: string[];
-  history: LlmMessage[];
-  /** Model chosen through the ACP model picker, or the configured default. */
-  model: string;
-  /** Human-readable title derived from the first prompt. */
-  title?: string;
-  /** Reasoning effort chosen through the ACP reasoning selector. */
-  reasoningLevel: string;
-  /** Current session mode (build/plan/ask). */
-  mode: string;
-  /** Whether the session has been deleted during this turn. */
-  deleted?: boolean;
-  /** Tools permanently allowed via an `allow_always` permission outcome. */
-  allowedTools: Set<ToolName>;
-  /** Aborts the in-flight prompt turn when the client cancels. */
-  abort: AbortController | null;
-  messageCounter: number;
-  /** Prompt tokens of the last model request, as reported by the provider. */
-  lastPromptTokens: number;
-  /** Cumulative estimated cost of the session in pollen. */
-  costSoFar: number;
-  /** Live MCP connections for this session. */
-  mcpConnections: McpConnection[];
-  /** MCP tool bindings keyed by the name exposed to the model. */
-  mcpTools: Map<string, McpToolBinding>;
-  /** OpenAI tool definitions for the MCP tools, appended to the builtin set. */
-  mcpToolDefinitions: import("./llm.js").LlmToolDefinition[];
-};
 
 /**
  * Builds the ACP coding agent.
@@ -233,24 +204,13 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
 
     const sessionId = `sess_${randomBytes(9).toString("hex")}`;
     const model = config.model;
-    const session: SessionState = {
+    const session = createSessionState({
       id: sessionId,
       cwd: roots[0] as string,
       roots,
-      history: [systemMessage(roots[0] as string)],
       model,
-      title: undefined,
-      reasoningLevel: "medium",
-      mode: "build",
-      allowedTools: new Set(),
-      abort: null,
-      messageCounter: 0,
-      lastPromptTokens: 0,
-      costSoFar: 0,
-      mcpConnections: [],
-      mcpTools: new Map(),
-      mcpToolDefinitions: [],
-    };
+      history: [systemMessage(roots[0] as string)],
+    });
     sessions.set(sessionId, session);
 
     process.stderr.write(
@@ -341,24 +301,19 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     }
 
     const root = loadedRoots[0] as string;
-    const session: SessionState = {
+    const session = createSessionState({
       id: sessionId,
       cwd: root,
       roots: loadedRoots,
-      history: rebaseHistory(stored.history, root, stored.cwd),
       model: stored.model,
-      title: stored.title,
-      reasoningLevel: stored.reasoningLevel ?? "medium",
-      mode: stored.mode ?? "build",
-      allowedTools: new Set(stored.allowedTools as ToolName[]),
-      abort: null,
-      messageCounter: stored.messageCounter,
-      lastPromptTokens: stored.lastPromptTokens,
-      costSoFar: 0,
-      mcpConnections: [],
-      mcpTools: new Map(),
-      mcpToolDefinitions: [],
-    };
+      history: rebaseHistory(stored.history, root, stored.cwd),
+    });
+    session.title = stored.title;
+    session.reasoningLevel = stored.reasoningLevel ?? "medium";
+    session.mode = stored.mode ?? "build";
+    session.allowedTools = new Set(stored.allowedTools as ToolName[]);
+    session.messageCounter = stored.messageCounter;
+    session.lastPromptTokens = stored.lastPromptTokens;
     sessions.set(sessionId, session);
 
     process.stderr.write(
@@ -443,24 +398,19 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     }
 
     const root = loadedRoots[0] as string;
-    const session: SessionState = {
+    const session = createSessionState({
       id: sessionId,
       cwd: root,
       roots: loadedRoots,
-      history: rebaseHistory(stored.history, root, stored.cwd),
       model: stored.model,
-      title: stored.title,
-      reasoningLevel: stored.reasoningLevel ?? "medium",
-      mode: stored.mode ?? "build",
-      allowedTools: new Set(stored.allowedTools as ToolName[]),
-      abort: null,
-      messageCounter: stored.messageCounter,
-      lastPromptTokens: stored.lastPromptTokens,
-      costSoFar: 0,
-      mcpConnections: [],
-      mcpTools: new Map(),
-      mcpToolDefinitions: [],
-    };
+      history: rebaseHistory(stored.history, root, stored.cwd),
+    });
+    session.title = stored.title;
+    session.reasoningLevel = stored.reasoningLevel ?? "medium";
+    session.mode = stored.mode ?? "build";
+    session.allowedTools = new Set(stored.allowedTools as ToolName[]);
+    session.messageCounter = stored.messageCounter;
+    session.lastPromptTokens = stored.lastPromptTokens;
     sessions.set(sessionId, session);
 
     const connections = await connectMcpServers(ctx.params.mcpServers ?? []);
