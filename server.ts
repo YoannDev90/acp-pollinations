@@ -294,6 +294,24 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     session.mcpTools = merged.bindings;
     session.mcpToolDefinitions = merged.definitions;
 
+    // Replay the restored transcript so the client can render the thread again.
+    const notify = createNotifier(ctx.client, sessionId);
+    for (const message of session.history) {
+      if (message.role === "user") {
+        await notify({
+          sessionUpdate: "user_message_chunk",
+          messageId: nextMessageId(session),
+          content: { type: "text", text: message.content ?? "" },
+        });
+      } else if (message.role === "assistant" && message.content) {
+        await notify({
+          sessionUpdate: "agent_message_chunk",
+          messageId: nextMessageId(session),
+          content: { type: "text", text: message.content },
+        });
+      }
+    }
+
     return { configOptions: [buildModelOption(await modelCatalog(), session.model)] };
   });
 
