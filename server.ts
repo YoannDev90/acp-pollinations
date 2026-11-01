@@ -63,6 +63,16 @@ const AVAILABLE_MODES: ReadonlyArray<{ id: string; name: string; description: st
 
 const AVAILABLE_COMMANDS: ReadonlyArray<{ name: string; description: string }> = [
   { name: "help", description: "Show available commands" },
+  { name: "status", description: "Show session status" },
+  { name: "model", description: "Show or switch the model" },
+  { name: "mode", description: "Show or switch Build/Plan/Ask" },
+  { name: "reasoning", description: "Show or set reasoning effort" },
+  { name: "clear", description: "Clear the conversation" },
+  { name: "cost", description: "Show token usage and cost" },
+  { name: "tools", description: "List available tools" },
+  { name: "compact", description: "Compact the context" },
+  { name: "sessions", description: "List persisted sessions" },
+  { name: "delete", description: "Delete this session" },
 ];
 
 export type CreatePollinationsAgentOptions = {
