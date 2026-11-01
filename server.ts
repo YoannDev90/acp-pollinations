@@ -634,6 +634,27 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       // Handle slash commands locally so they work even when the client does not
       // render the `available_commands_update` notification.
       const promptText = promptToText(ctx.params.prompt).trim();
+
+      if (promptText === "/status" || promptText.startsWith("/status ")) {
+        await replayUserPrompt(ctx.params.prompt, notify, session);
+        const statusText =
+          `Session: ${session.id}\n` +
+          `Model: ${session.model}\n` +
+          `Mode: ${session.mode}\n` +
+          `Reasoning: ${session.reasoningLevel}\n` +
+          `Last prompt tokens: ${session.lastPromptTokens}\n` +
+          `Cost so far: ${session.costSoFar.toFixed(6)} pollen`;
+        const messageId = nextMessageId(session);
+        await notify({
+          sessionUpdate: "agent_message_chunk",
+          messageId,
+          content: { type: "text", text: statusText },
+        });
+        session.history.push({ role: "assistant", content: statusText });
+        await persist(session);
+        return { stopReason: "end_turn" };
+      }
+
       if (promptText === "/help" || promptText.startsWith("/help ")) {
         await replayUserPrompt(ctx.params.prompt, notify, session);
         const helpText = "Available commands:\n- /help  Show this help message.";
