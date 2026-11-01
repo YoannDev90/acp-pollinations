@@ -61,6 +61,10 @@ const AVAILABLE_MODES: ReadonlyArray<{ id: string; name: string; description: st
   { id: "ask", name: "Ask", description: "Answer questions" },
 ];
 
+const AVAILABLE_COMMANDS: ReadonlyArray<{ name: string; description: string }> = [
+  { name: "help", description: "Show available commands" },
+];
+
 export type CreatePollinationsAgentOptions = {
   config: AgentConfig;
   /** Injected LLM, for tests. Defaults to a real Pollinations client. */
@@ -242,6 +246,12 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     // Connect to any MCP servers the client supplied. A failure here degrades
     // to "no tools from that server" rather than failing session setup.
     const connections = await connectMcpServers(ctx.params.mcpServers ?? []);
+
+    const notify = createNotifier(ctx.client, sessionId);
+    await notify({
+      sessionUpdate: "available_commands_update",
+      availableCommands: [...AVAILABLE_COMMANDS],
+    });
     session.mcpConnections = connections;
     const merged = mergeMcpBindings(connections);
     session.mcpTools = merged.bindings;
