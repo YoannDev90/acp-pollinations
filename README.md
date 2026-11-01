@@ -26,10 +26,18 @@ supplies the Pollinations-specific behaviour on top of it.
 - **Context compaction** — once a session's last request crosses a token
   threshold, the transcript is summarised and replaced. The size comes from the
   provider's own usage report rather than an estimate.
+- **Session modes** — Build / Plan / Ask, advertised as native ACP modes; Plan
+  disables mutating tools.
+- **Reasoning selector** — a `thought_level` config option to pick the reasoning
+  effort.
+- **Slash commands** — advertises available commands (currently `/help`).
+- **Session notices** — surfaces errors and compaction failures to the client.
+- **Session info updates** — auto-generates a title from the first prompt.
+- **Session close / resume** — frees resources or reconnects without replay.
 - **Tool loop** — file reads and writes, directory listing, glob, grep, and a
   shell, all confined to the session workspace, with ACP permission gating on
   anything that mutates.
-- **MCP servers** — stdio MCP servers supplied by the client are launched and
+- **MCP servers** — stdio and HTTP MCP servers supplied by the client are
   connected, and their tools are exposed to the model alongside the built-in
   ones.
 - **Cancellation and cleanup** — a cancelled turn aborts in-flight work, and

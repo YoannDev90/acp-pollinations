@@ -2,20 +2,20 @@
 
 Status of this agent against the [Agent Client Protocol v1](https://agentclientprotocol.com/protocol/v1/overview.md).
 
-Legend: ✅ implemented, ❌ not implemented (optional in most cases), ⚠️ partial.
+Legend: ✅ implemented, ❌ not implemented (optional in most cases).
 
 ## Core lifecycle
 
 | Feature | Status | Notes |
 |---|---|---|
 | `initialize` / version negotiation | ✅ | `PROTOCOL_VERSION`, capability exchange |
-| `authenticate` | ✅ | no-op; the API key lives on the machine |
+| `authenticate` | ❌ | by design: the API key lives on the machine |
 | `session/new` | ✅ | `cwd`, `additionalDirectories`, `mcpServers` |
 | `session/load` | ✅ | restores history and replays it |
-| `session/resume` | ❌ | not implemented (optional) |
+| `session/resume` | ✅ | restores context without replay |
 | `session/list` | ✅ | paged, filterable by `cwd` |
 | `session/delete` | ✅ | aborts the turn and removes the file |
-| `session/close` | ❌ | not implemented (optional) |
+| `session/close` | ✅ | cancels work and frees resources |
 | `session/prompt` | ✅ | tool loop, `maxTurnRequests` ceiling |
 | `session/cancel` | ✅ | aborts in-flight work |
 
@@ -27,7 +27,9 @@ Legend: ✅ implemented, ❌ not implemented (optional in most cases), ⚠️ pa
 | `session/set_config_option` | ✅ | model + reasoning |
 | Model picker (`configOptions`) | ✅ | grouped by origin and billing tier |
 | Reasoning selector | ✅ | `thought_level` category |
-| `config_option_update` notification | ❌ | options are returned in responses only |
+| `config_option_update` notification | ✅ | sent on every change |
+| `available_commands_update` | ✅ | advertises `/help` |
+| `session_info_update` | ✅ | auto title from first prompt |
 
 ## Session updates (`session/update`)
 
@@ -38,12 +40,13 @@ Legend: ✅ implemented, ❌ not implemented (optional in most cases), ⚠️ pa
 | `agent_thought_chunk` | ✅ | |
 | `tool_call` | ✅ | with `name`, `kind`, `rawInput` |
 | `tool_call_update` | ✅ | with diff / terminal content |
-| `plan` | ❌ | no structured plan |
-| `available_commands_update` | ❌ | slash commands not implemented |
+| `plan` | ✅ | single entry per turn |
+| `available_commands_update` | ✅ | |
 | `current_mode_update` | ✅ | |
-| `session_info_update` | ❌ | no auto title |
+| `config_option_update` | ✅ | |
+| `session_info_update` | ✅ | |
 | `usage_update` | ✅ | `used` / `size` / `cost` (USD) |
-| `notice` | ❌ | not implemented |
+| `notice` | ✅ | errors and compaction failures |
 | `compaction_update` / `compaction_summary_chunk` | ✅ | when client advertises support |
 
 ## Tools
@@ -67,7 +70,7 @@ All built-in tools are confined to the session workspace root set (symlinks reso
 | `fs.readTextFile` / `writeTextFile` | ✅ | falls back to local disk |
 | `terminal/*` | ✅ | falls back to local spawn |
 | `session.compaction` | ✅ | gates compaction lifecycle updates |
-| `session.notices` | ❌ | not advertised or sent |
+| `session.notices` | ✅ | gates notice updates |
 
 ## Permissions
 
@@ -82,8 +85,8 @@ All built-in tools are confined to the session workspace root set (symlinks reso
 | Transport | Status | Notes |
 |---|---|---|
 | stdio | ✅ | tools exposed to the model |
-| HTTP | ✅ | `mcpCapabilities.http = true` |
-| SSE | ❌ | `mcpCapabilities.sse = false` |
+| HTTP | ✅ | JSON-RPC over HTTP |
+| SSE | ❌ | not implemented |
 
 ## Other features
 
@@ -93,10 +96,10 @@ All built-in tools are confined to the session workspace root set (symlinks reso
 | Session persistence | ✅ | atomic writes, validated on read |
 | Session listing / deletion | ✅ | |
 | Context usage + cost reporting | ✅ | `usage_update` |
-| Slash commands | ❌ | not implemented |
+| Slash commands | ⚠️ | only `/help` advertised |
 | Elicitation | ❌ | not implemented |
 | Authentication methods | ❌ | by design: key lives on the machine |
 | Additional workspace roots | ✅ | |
-| `session/close` / `session/resume` | ❌ | not implemented |
+| `session/close` / `session/resume` | ✅ | |
 
 Last updated against the ACP v1 documentation exported in `docs/acp-v1/`.
