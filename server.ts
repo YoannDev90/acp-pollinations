@@ -640,6 +640,20 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     // threshold is measured rather than estimated.
     if (usage?.promptTokens) session.lastPromptTokens = usage.promptTokens;
 
+    if (usage) {
+      const models = await modelCatalog();
+      const info = models.find((model) => model.id === session.model);
+      const cost =
+        info && info.promptPrice !== null && info.completionPrice !== null
+          ? usage.promptTokens * info.promptPrice + usage.completionTokens * info.completionPrice
+          : null;
+      process.stderr.write(
+        `${AGENT_TITLE}: usage session=${session.id} model=${session.model} ` +
+          `prompt=${usage.promptTokens} completion=${usage.completionTokens} ` +
+          `cost=${cost === null ? "unknown" : cost.toFixed(6)} pollen\n`,
+      );
+    }
+
     if (signal.aborted) return { kind: "cancelled" };
 
     const calls = [...pendingCalls.entries()]
