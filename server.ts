@@ -208,6 +208,11 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     };
     sessions.set(sessionId, session);
 
+    process.stderr.write(
+      `${AGENT_TITLE}: session/new id=${sessionId} cwd=${roots[0]} model=${model} ` +
+        `mcpServers=${ctx.params.mcpServers?.length ?? 0}\n`,
+    );
+
     // Connect to any MCP servers the client supplied. A failure here degrades
     // to "no tools from that server" rather than failing session setup.
     const connections = await connectMcpServers(ctx.params.mcpServers ?? []);
@@ -278,6 +283,11 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     };
     sessions.set(sessionId, session);
 
+    process.stderr.write(
+      `${AGENT_TITLE}: session/load id=${sessionId} cwd=${root} ` +
+        `restoredMessages=${session.history.length} model=${session.model}\n`,
+    );
+
     const connections = await connectMcpServers(ctx.params.mcpServers ?? []);
     session.mcpConnections = connections;
     const merged = mergeMcpBindings(connections);
@@ -297,6 +307,11 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       ...(ctx.params.cursor ? { cursor: ctx.params.cursor } : {}),
     });
 
+    process.stderr.write(
+      `${AGENT_TITLE}: session/list cwd=${ctx.params.cwd ?? "*"} returned=${page.length} ` +
+        `nextCursor=${nextCursor ?? "none"}\n`,
+    );
+
     return {
       sessions: page.map((record) => ({
         sessionId: record.id,
@@ -310,6 +325,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
 
   app.onRequest(methods.agent.session.delete, async (ctx) => {
     const { sessionId } = ctx.params;
+    process.stderr.write(`${AGENT_TITLE}: session/delete id=${sessionId}\n`);
     const live = sessions.get(sessionId);
     // Deleting a session this agent never created succeeds silently. A client
     // clearing its own bookkeeping cannot know whether the agent still holds
@@ -385,6 +401,9 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     const notify = createNotifier(ctx.client, session.id);
 
     try {
+      process.stderr.write(
+        `${AGENT_TITLE}: prompt start session=${session.id} model=${session.model}\n`,
+      );
       // Compact before the user's turn, not after it: the expensive request is
       // the one about to happen, so trimming first is what actually pays off.
       await maybeCompact(session, notify, abort.signal, capabilities);
@@ -417,11 +436,15 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       if (abort.signal.aborted) return { stopReason: "cancelled" };
       return { stopReason };
     } catch (error) {
+      process.stderr.write(
+        `${AGENT_TITLE}: prompt error session=${session.id}: ${(error as Error).message}\n`,
+      );
       if (abort.signal.aborted) return { stopReason: "cancelled" };
       throw toRequestError(error);
     } finally {
       session.abort = null;
       ctx.signal.removeEventListener("abort", forwardAbort);
+      process.stderr.write(`${AGENT_TITLE}: prompt finished session=${session.id}\n`);
       // Persist after every turn, including cancelled and failed ones, so a
       // restart never rewinds a thread to an earlier point.
       await persist(session);
@@ -496,6 +519,11 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
   ): Promise<void> {
     if (config.compactionThresholdTokens <= 0) return;
     if (session.lastPromptTokens < config.compactionThresholdTokens) return;
+
+    process.stderr.write(
+      `${AGENT_TITLE}: compacting session=${session.id} lastPromptTokens=${session.lastPromptTokens} ` +
+        `threshold=${config.compactionThresholdTokens}\n`,
+    );
     // Below this there is no conversation worth summarising, and a provider
     // reporting an implausible count must not cost a wasted model request.
     if (session.history.length < 3) return;
@@ -528,6 +556,9 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
         });
       }
     } catch (error) {
+      process.stderr.write(
+        `${AGENT_TITLE}: compaction failed session=${session.id}: ${(error as Error).message}\n`,
+      );
       if (reportable) {
         await notify({
           sessionUpdate: "compaction_update",
@@ -671,6 +702,11 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       });
     }
 
+    process.stderr.write(
+      `${AGENT_TITLE}: model request session=${session.id} model=${session.model} ` +
+        `toolCalls=${pendingCalls.size} promptTokens=${usage?.promptTokens ?? 0}\n`,
+    );
+
     if (signal.aborted) return { kind: "cancelled" };
 
     const calls = [...pendingCalls.entries()]
@@ -777,6 +813,11 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
         };
         result = await executeTool(call.function.name, input, toolContext);
       }
+
+      process.stderr.write(
+        `${AGENT_TITLE}: tool ${call.function.name} session=${session.id} ` +
+          `status=${result.isError ? "failed" : "completed"}\n`,
+      );
 
       await notify({
         sessionUpdate: "tool_call_update",

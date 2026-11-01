@@ -101,7 +101,7 @@ export async function resolveConfig(
   const home =
     env.POLLINATIONS_HOME?.trim() || join(homedir(), ".pollinations");
 
-  return {
+  const config = {
     apiKey: await resolveApiKey(options),
     baseUrl: (env.POLLINATIONS_BASE_URL?.trim() || DEFAULT_BASE_URL).replace(
       /\/+$/,
@@ -118,6 +118,15 @@ export async function resolveConfig(
       Number.isFinite(compactionTokens) && compactionTokens >= 0
         ? compactionTokens
         : DEFAULT_COMPACTION_THRESHOLD_TOKENS,
-    permissionMode,
+    permissionMode: permissionMode as "ask" | "allow",
   };
+
+  process.stderr.write(
+    `Pollinations: config baseUrl=${config.baseUrl} model=${config.model} ` +
+      `maxTurnRequests=${config.maxTurnRequests} compactionThreshold=${config.compactionThresholdTokens} ` +
+      `permissionMode=${config.permissionMode} sessionsDir=${config.sessionsDir} ` +
+      `apiKey=${config.apiKey ? "present" : "missing"}\n`,
+  );
+
+  return config;
 }

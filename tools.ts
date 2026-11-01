@@ -710,6 +710,8 @@ async function bashTool(
   const command = typeof input.command === "string" ? input.command.trim() : "";
   if (!command) throw new ToolError("A non-empty `command` is required");
 
+  process.stderr.write(`Pollinations: bash session=${ctx.sessionId} command=${truncate(command, 120)}\n`);
+
   const run = ctx.clientCapabilities?.terminal
     ? runViaClientTerminal
     : runLocally;

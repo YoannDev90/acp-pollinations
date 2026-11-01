@@ -223,6 +223,8 @@ export async function connectMcpServer(config: McpServerConfig): Promise<McpConn
     );
   }
 
+  process.stderr.write(`${serverName}: connected with ${tools.length} tool(s)\n`);
+
   const close = () => {
     try {
       rl.close();
