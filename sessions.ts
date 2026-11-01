@@ -341,6 +341,11 @@ function parseMessage(value: unknown): LlmMessage | null {
     message.tool_call_id = raw.tool_call_id;
   }
 
+  if (raw.reasoning_content !== undefined) {
+    if (raw.reasoning_content !== null && typeof raw.reasoning_content !== "string") return null;
+    message.reasoning_content = raw.reasoning_content as string | null;
+  }
+
   return message;
 }
 

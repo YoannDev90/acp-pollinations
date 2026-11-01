@@ -542,7 +542,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
 
       session.history = [
         session.history[0] as LlmMessage,
-        { role: "assistant", content: summary },
+        { role: "assistant", content: summary, reasoning_content: "" },
       ];
       session.lastPromptTokens = 0;
       await persist(session);
@@ -629,6 +629,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
   ): Promise<ModelOutcome> {
     const messageId = nextMessageId(session);
     let text = "";
+    let reasoning = "";
     let usage: LlmUsage | undefined;
 
     const pendingCalls = new Map<number, { id: string; name: string; arguments: string }>();
@@ -645,6 +646,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       const chunk = step.value;
 
       if (chunk.reasoning) {
+        reasoning += chunk.reasoning;
         await notify({
           sessionUpdate: "agent_thought_chunk",
           messageId,
@@ -721,6 +723,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       }));
 
     const assistantMessage: LlmMessage = { role: "assistant", content: text || null };
+    if (reasoning) assistantMessage.reasoning_content = reasoning;
     if (calls.length > 0) assistantMessage.tool_calls = calls.map(({ call }) => call);
     session.history.push(assistantMessage);
 

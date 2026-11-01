@@ -17,6 +17,13 @@ export type LlmMessage = {
   tool_calls?: LlmToolCall[];
   /** Required on `tool` messages so the model can match results to calls. */
   tool_call_id?: string;
+  /**
+   * Reasoning/thinking produced by the model for an assistant turn.
+   *
+   * Reasoning models require this to be echoed back on every earlier
+   * assistant message, otherwise the request is rejected.
+   */
+  reasoning_content?: string | null;
 };
 
 /** OpenAI-style function tool definition. */
