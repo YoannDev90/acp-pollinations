@@ -812,6 +812,11 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       );
 
       // Report context usage and cumulative cost to clients that render them.
+      process.stderr.write(
+        `${AGENT_TITLE}: sending usage_update session=${session.id} used=${usage.promptTokens} ` +
+          `size=${info?.contextLength ?? 0} cost=${session.costSoFar.toFixed(6)}\n`,
+      );
+
       await notify({
         sessionUpdate: "usage_update",
         used: usage.promptTokens,
