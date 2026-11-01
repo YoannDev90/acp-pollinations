@@ -632,6 +632,13 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
 
       await replayUserPrompt(ctx.params.prompt, notify, session);
 
+      await notify({
+        sessionUpdate: "plan",
+        entries: [
+          { content: "Handle the user request", priority: "medium", status: "in_progress" },
+        ],
+      });
+
       if (!session.title) {
         const firstText = promptToText(ctx.params.prompt);
         session.title = firstText.split("\n")[0]?.slice(0, 80) || "New session";
@@ -665,11 +672,28 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       }
 
       if (abort.signal.aborted) return { stopReason: "cancelled" };
+
+      await notify({
+        sessionUpdate: "plan",
+        entries: [{ content: "Handle the user request", priority: "medium", status: "completed" }],
+      });
+
       return { stopReason };
     } catch (error) {
       process.stderr.write(
         `${AGENT_TITLE}: prompt error session=${session.id}: ${(error as Error).message}\n`,
       );
+
+      await notify({
+        sessionUpdate: "plan",
+        entries: [
+          {
+            content: "Handle the user request",
+            priority: "medium",
+            status: "in_progress",
+          },
+        ],
+      });
       if (capabilities?.session?.notices) {
         await notify({
           sessionUpdate: "notice",
