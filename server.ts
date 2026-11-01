@@ -180,7 +180,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       agentCapabilities: {
         loadSession: true,
         promptCapabilities: { embeddedContext: true },
-        mcpCapabilities: { http: false, sse: false },
+        mcpCapabilities: { http: true, sse: true },
         sessionCapabilities: { list: {}, delete: {}, close: {}, resume: {} },
       },
       agentInfo: { name: AGENT_NAME, title: AGENT_TITLE, version: AGENT_VERSION },
@@ -626,6 +626,24 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       process.stderr.write(
         `${AGENT_TITLE}: prompt start session=${session.id} model=${session.model}\n`,
       );
+
+      // Handle slash commands locally so they work even when the client does not
+      // render the `available_commands_update` notification.
+      const promptText = promptToText(ctx.params.prompt).trim();
+      if (promptText === "/help" || promptText.startsWith("/help ")) {
+        await replayUserPrompt(ctx.params.prompt, notify, session);
+        const helpText = "Available commands:\n- /help  Show this help message.";
+        const messageId = nextMessageId(session);
+        await notify({
+          sessionUpdate: "agent_message_chunk",
+          messageId,
+          content: { type: "text", text: helpText },
+        });
+        session.history.push({ role: "assistant", content: helpText });
+        await persist(session);
+        return { stopReason: "end_turn" };
+      }
+
       // Compact before the user's turn, not after it: the expensive request is
       // the one about to happen, so trimming first is what actually pays off.
       await maybeCompact(session, notify, abort.signal, capabilities);
