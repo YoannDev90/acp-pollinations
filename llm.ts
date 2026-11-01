@@ -108,98 +108,125 @@ export class PollinationsLlm {
    * resolves with the accumulated usage once the stream ends.
    */
   async *chat(params: LlmChatParams): AsyncGenerator<LlmChunk, LlmUsage> {
-    const controller = new AbortController();
-    const onAbort = () => controller.abort();
-    params.signal?.addEventListener("abort", onAbort, { once: true });
+    const maxAttempts = 4;
 
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const controller = new AbortController();
+      const onAbort = () => controller.abort();
+      params.signal?.addEventListener("abort", onAbort, { once: true });
 
-    try {
-      const body: Record<string, unknown> = {
-        model: params.model ?? this.model,
-        messages: params.messages,
-        stream: true,
-      };
-      if (params.tools && params.tools.length > 0) body.tools = params.tools;
+      const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
 
-      const response = await this.fetchImpl(`${this.baseUrl}/v1/chat/completions`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${this.apiKey}`,
-          "Content-Type": "application/json",
-          Accept: "text/event-stream",
-        },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
+      let yielded = false;
+      try {
+        const body: Record<string, unknown> = {
+          model: params.model ?? this.model,
+          messages: params.messages,
+          stream: true,
+        };
+        if (params.tools && params.tools.length > 0) body.tools = params.tools;
 
-      if (!response.ok) {
-        const errorBody = await response.text().catch(() => "");
-        throw new LlmError(
-          `Pollinations request failed (${response.status} ${response.statusText})${describePollinationsError(errorBody)}`,
-          response.status,
-          errorBody,
-        );
-      }
-      if (!response.body) throw new LlmError("Pollinations returned an empty response body");
+        const response = await this.fetchImpl(`${this.baseUrl}/v1/chat/completions`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${this.apiKey}`,
+            "Content-Type": "application/json",
+            Accept: "text/event-stream",
+          },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
 
-      let usage: LlmUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
-      const parser = createSseParser();
-      const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
-
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        if (!value) continue;
-
-        for (const event of parser.push(value)) {
-          if (event.data.trim() === "[DONE]") continue;
-
-          let payload: StreamPayload;
-          try {
-            payload = JSON.parse(event.data) as StreamPayload;
-          } catch {
-            // Tolerate keep-alives and non-JSON frames from proxies.
+        if (!response.ok) {
+          const errorBody = await response.text().catch(() => "");
+          const retryable = isRetryableResponse(response.status, errorBody);
+          if (retryable && attempt < maxAttempts - 1 && !params.signal?.aborted) {
+            await sleep(retryDelayMs(response, attempt), params.signal);
             continue;
           }
+          throw new LlmError(
+            `Pollinations request failed (${response.status} ${response.statusText})${describePollinationsError(errorBody)}`,
+            response.status,
+            errorBody,
+          );
+        }
+        if (!response.body) throw new LlmError("Pollinations returned an empty response body");
 
-          if (payload.usage) usage = normalizeUsage(payload.usage);
+        let usage: LlmUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+        const parser = createSseParser();
+        const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
 
-          const delta = payload.choices?.[0]?.delta;
-          if (!delta) continue;
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          if (!value) continue;
 
-          const chunk: LlmChunk = {};
-          if (delta.content) chunk.text = delta.content;
-          if (delta.reasoning) chunk.reasoning = delta.reasoning;
-          if (delta.tool_calls) {
-            chunk.toolCalls = delta.tool_calls.map((call) => ({
-              index: call.index ?? 0,
-              ...(call.id !== undefined ? { id: call.id } : {}),
-              ...(call.function?.name !== undefined ? { name: call.function.name } : {}),
-              ...(call.function?.arguments !== undefined ? { arguments: call.function.arguments } : {}),
-            }));
+          for (const event of parser.push(value)) {
+            if (event.data.trim() === "[DONE]") continue;
+
+            let payload: StreamPayload;
+            try {
+              payload = JSON.parse(event.data) as StreamPayload;
+            } catch {
+              // Tolerate keep-alives and non-JSON frames from proxies.
+              continue;
+            }
+
+            if (payload.usage) usage = normalizeUsage(payload.usage);
+
+            const delta = payload.choices?.[0]?.delta;
+            if (!delta) continue;
+
+            const chunk: LlmChunk = {};
+            if (delta.content) chunk.text = delta.content;
+            if (delta.reasoning) chunk.reasoning = delta.reasoning;
+            if (delta.tool_calls) {
+              chunk.toolCalls = delta.tool_calls.map((call) => ({
+                index: call.index ?? 0,
+                ...(call.id !== undefined ? { id: call.id } : {}),
+                ...(call.function?.name !== undefined ? { name: call.function.name } : {}),
+                ...(call.function?.arguments !== undefined ? { arguments: call.function.arguments } : {}),
+              }));
+            }
+            if (chunk.text || chunk.reasoning || chunk.toolCalls) {
+              yielded = true;
+              yield chunk;
+            }
           }
-          if (chunk.text || chunk.reasoning || chunk.toolCalls) yield chunk;
         }
-      }
 
-      for (const event of parser.flush()) {
-        if (event.data.trim() === "[DONE]") continue;
-        try {
-          const payload = JSON.parse(event.data) as StreamPayload;
-          if (payload.usage) usage = normalizeUsage(payload.usage);
-          const delta = payload.choices?.[0]?.delta;
-          if (delta?.content) yield { text: delta.content };
-        } catch {
-          // Ignore an unparsable trailing frame.
+        for (const event of parser.flush()) {
+          if (event.data.trim() === "[DONE]") continue;
+          try {
+            const payload = JSON.parse(event.data) as StreamPayload;
+            if (payload.usage) usage = normalizeUsage(payload.usage);
+            const delta = payload.choices?.[0]?.delta;
+            if (delta?.content) {
+              yielded = true;
+              yield { text: delta.content };
+            }
+          } catch {
+            // Ignore an unparsable trailing frame.
+          }
         }
-      }
 
-      return usage;
-    } finally {
-      clearTimeout(timeout);
-      params.signal?.removeEventListener("abort", onAbort);
+        return usage;
+      } catch (error) {
+        if (params.signal?.aborted) throw error;
+
+        const retryable = isRetryableError(error);
+        if (retryable && !yielded && attempt < maxAttempts - 1) {
+          await sleep(retryDelayMs(undefined, attempt), params.signal);
+          continue;
+        }
+        throw error;
+      } finally {
+        clearTimeout(timeout);
+        params.signal?.removeEventListener("abort", onAbort);
+      }
     }
+
+    throw new LlmError("Pollinations request failed after retries");
   }
 }
 
@@ -233,6 +260,56 @@ function normalizeUsage(raw: NonNullable<StreamPayload["usage"]>): LlmUsage {
 }
 
 /** Turns an error response body into a human-readable suffix. */
+/** Whether a failed response is worth retrying (rate limits, transient 5xx). */
+function isRetryableResponse(status: number, body: string): boolean {
+  if (status === 429 || status === 502 || status === 503 || status === 504) return true;
+  return /too many requests|rate limit/i.test(body);
+}
+
+/** Whether a thrown error is worth retrying. */
+function isRetryableError(error: unknown): boolean {
+  if (error instanceof LlmError) {
+    if (error.status !== undefined) return isRetryableResponse(error.status, error.body ?? "");
+    return /too many requests|rate limit|ECONN|ETIMEDOUT|fetch failed/i.test(error.message);
+  }
+  if (error instanceof Error) {
+    return /ECONN|ETIMEDOUT|fetch failed/i.test(error.message);
+  }
+  return false;
+}
+
+/** Delay before the next retry attempt. */
+function retryDelayMs(response: Response | undefined, attempt: number): number {
+  const retryAfter = response?.headers?.get?.("retry-after");
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds)) return Math.min(Math.max(0, seconds) * 1000, 30_000);
+    const date = Date.parse(retryAfter);
+    if (!Number.isNaN(date)) return Math.min(Math.max(0, date - Date.now()), 30_000);
+  }
+  return Math.min(1000 * 2 ** attempt, 8000);
+}
+
+/** Resolves after `ms`, or rejects early when `signal` aborts. */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolvePromise();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      rejectPromise(new Error("aborted"));
+    };
+    if (signal?.aborted) {
+      clearTimeout(timer);
+      rejectPromise(new Error("aborted"));
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 function describePollinationsError(body: string): string {
   if (!body) return "";
   try {
