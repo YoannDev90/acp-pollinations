@@ -846,7 +846,19 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
 
       if (promptText === "/help" || promptText.startsWith("/help ")) {
         await replayUserPrompt(ctx.params.prompt, notify, session);
-        const helpText = "Available commands:\n- /help  Show this help message.";
+        const helpText =
+          "Available commands:\n" +
+          "- /help       Show this help message.\n" +
+          "- /status     Show session status.\n" +
+          "- /model      Show or switch the model.\n" +
+          "- /mode       Show or switch Build/Plan/Ask.\n" +
+          "- /reasoning  Show or set reasoning effort.\n" +
+          "- /clear      Clear the conversation.\n" +
+          "- /cost       Show token usage and cost.\n" +
+          "- /tools      List available tools.\n" +
+          "- /compact    Compact the context.\n" +
+          "- /sessions   List persisted sessions.\n" +
+          "- /delete     Delete this session.";
         const messageId = nextMessageId(session);
         await notify({
           sessionUpdate: "agent_message_chunk",
