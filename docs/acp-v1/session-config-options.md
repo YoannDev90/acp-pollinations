@@ -1,0 +1,480 @@
+> ## Documentation Index
+> Fetch the complete documentation index at: https://agentclientprotocol.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Session Config Options
+
+> Flexible configuration selectors for agent sessions
+
+Agents can provide an arbitrary list of configuration options for a session, which Clients show to users as selectors. Options can cover models, model parameters, modes, reasoning levels, and more.
+
+> [!NOTE]
+>
+> Session Config Options are the preferred way to expose session-level
+> configuration. If an Agent provides `configOptions`, Clients **SHOULD** use
+> them instead of the [`modes`](https://agentclientprotocol.com/protocol/v1/session-modes) field. Modes will be
+> removed in a future version of the protocol.
+
+## Initial state
+
+During [Session Setup](https://agentclientprotocol.com/protocol/v1/session-setup.md) the Agent **MAY** return a list of configuration options and their current values:
+
+```json theme={null}
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "sessionId": "sess_abc123def456",
+    "configOptions": [
+      {
+        "id": "mode",
+        "name": "Session Mode",
+        "description": "Controls how the agent requests permission",
+        "category": "mode",
+        "type": "select",
+        "currentValue": "ask",
+        "options": [
+          {
+            "value": "ask",
+            "name": "Ask",
+            "description": "Request permission before making any changes"
+          },
+          {
+            "value": "code",
+            "name": "Code",
+            "description": "Write and modify code with full tool access"
+          }
+        ]
+      },
+      {
+        "id": "model",
+        "name": "Model",
+        "category": "model",
+        "type": "select",
+        "currentValue": "model-1",
+        "options": [
+          {
+            "value": "model-1",
+            "name": "Model 1",
+            "description": "The fastest model"
+          },
+          {
+            "value": "model-2",
+            "name": "Model 2",
+            "description": "The most powerful model"
+          }
+        ]
+      },
+      {
+        "id": "context_size",
+        "name": "Context Size",
+        "category": "model_config",
+        "type": "select",
+        "currentValue": "200k",
+        "options": [
+          {
+            "value": "200k",
+            "name": "200K"
+          },
+          {
+            "value": "1m",
+            "name": "1M"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+**configOptions** `SessionConfigOption[]`
+
+The list of configuration options available for this session. The order of
+this array represents the Agent's preferred priority. Clients **SHOULD**
+respect this ordering when displaying options.
+
+### SessionConfigOption
+
+**id** `string` *required*
+
+Unique identifier for this configuration option. Used when setting values.
+
+**name** `string` *required*
+
+Human-readable label for the option
+
+**description** `string`
+
+Optional description providing more details about what this option controls
+
+**category** `SessionConfigOptionCategory`
+
+Optional [semantic category](#option-categories) to help Clients provide
+consistent UX.
+
+**type** `string` *required*
+
+The type of input control. `select` is supported by default. `boolean` is only
+supported when the Client advertises `session.configOptions.boolean: {}` in
+`clientCapabilities`.
+
+**currentValue** `string | boolean` *required*
+
+The current value for this option. For `select` options this is a string value
+ID. For `boolean` options this is a boolean.
+
+**options** `SessionConfigSelectOption[] | SessionConfigSelectGroup[]`
+
+The available values for a `select` option. Required when `type` is `"select"`
+and omitted when `type` is `"boolean"`. This is either a flat array of values
+or an array of groups. Values and groups are not mixed in the same array.
+
+### SessionConfigSelectOption
+
+**value** `string` *required*
+
+The value identifier used when setting this option
+
+**name** `string` *required*
+
+Human-readable name to display
+
+**description** `string`
+
+Optional description of what this value does
+
+### Grouped select options
+
+Select values may be organized into groups:
+
+```json theme={null}
+{
+  "options": [
+    {
+      "group": "recommended",
+      "name": "Recommended",
+      "options": [
+        {
+          "value": "model-1",
+          "name": "Model 1",
+          "description": "Fast for everyday tasks"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Each `SessionConfigSelectGroup` requires `group` (its unique string identifier),
+`name` (its human-readable label), and `options` (an array of
+`SessionConfigSelectOption` objects). A group may also include `_meta`. Each
+option still requires `value` and `name`. Its `description` and `_meta` fields
+are optional.
+
+### Boolean config options
+
+Agents **MAY** include boolean config options only after the Client advertises
+support during initialization:
+
+```json theme={null}
+{
+  "clientCapabilities": {
+    "session": {
+      "configOptions": {
+        "boolean": {}
+      }
+    }
+  }
+}
+```
+
+Omitting `session`, `configOptions`, or `boolean` means the Client does not
+advertise support.
+
+When support is advertised, a boolean option uses `type: "boolean"` and a
+boolean `currentValue`:
+
+```json theme={null}
+{
+  "id": "brave_mode",
+  "name": "Brave Mode",
+  "description": "Skip confirmation prompts and act autonomously",
+  "type": "boolean",
+  "currentValue": true
+}
+```
+
+Agents **MUST NOT** include `type: "boolean"` options in `configOptions`
+payloads unless the Client advertised support. Agents that need to support
+older Clients should omit the boolean option or provide a `select` fallback.
+
+## Option categories
+
+Each config option **MAY** include a `category` field. Categories are semantic metadata intended to help Clients provide consistent UX, such as attaching keyboard shortcuts, choosing icons, or deciding placement.
+
+> [!WARNING]
+>
+> Categories are for UX purposes only and **MUST NOT** be required for
+> correctness. Clients **MUST** handle missing or unknown categories gracefully.
+
+Category names beginning with `_` are free for custom use (e.g., `_my_custom_category`). Category names that do not begin with `_` are reserved for the ACP spec.
+
+| Category | Description |
+| - | - |
+| `mode` | Session mode selector |
+| `model` | Model selector |
+| `model_config` | Model-related parameter, such as context size or speed/quality trade-off |
+| `thought_level` | Thought/reasoning level selector |
+
+Clients **SHOULD** render `model_config` options near the `model` selector, such as in the same popover or panel. No capability negotiation is required for category values.
+
+When multiple options share the same category, Clients **SHOULD** use the array ordering to resolve ties, preferring earlier options in the list for prominent placement or keyboard shortcuts.
+
+## Option ordering
+
+The order of the `configOptions` array is significant. Agents **SHOULD** place higher-priority options first in the list.
+
+Clients **SHOULD**:
+
+* Display options in the order provided by the Agent
+* Use ordering to resolve ties when multiple options share the same category
+* If displaying a limited number of options, prefer those at the beginning of the list
+
+## Default values and graceful degradation
+
+Every configuration option's `currentValue` is the value the Agent uses until the Client changes it. Agents **MUST** be able to operate with it, even if:
+
+* The Client doesn't support configuration options
+* The Client chooses not to display certain options
+* The Client receives an option type it doesn't recognize
+
+If a Client receives an option with an unrecognized `type`, it **SHOULD** ignore that option. The Agent keeps using its `currentValue`.
+
+## Setting a config option
+
+The current value of a config option can be changed at any point during a session, whether the Agent is idle or generating a response.
+
+### From the Client
+
+Clients can change a config option value by calling the `session/set_config_option` method:
+
+```json theme={null}
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "session/set_config_option",
+  "params": {
+    "sessionId": "sess_abc123def456",
+    "configId": "mode",
+    "value": "code"
+  }
+}
+```
+
+**sessionId** `SessionId` *required*
+
+The ID of the session
+
+**configId** `string` *required*
+
+The `id` of the configuration option to change
+
+**value** `string | boolean` *required*
+
+The new value to set. For `select` options, this must be one of the values
+listed in the option's `options` array. For `boolean` options, this must be a
+boolean.
+
+For boolean options, Clients send `type: "boolean"` with a boolean `value`:
+
+```json theme={null}
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "method": "session/set_config_option",
+  "params": {
+    "sessionId": "sess_abc123def456",
+    "configId": "brave_mode",
+    "type": "boolean",
+    "value": true
+  }
+}
+```
+
+The Agent **MUST** respond with the complete list of all configuration options and their current values:
+
+```json theme={null}
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "configOptions": [
+      {
+        "id": "mode",
+        "name": "Session Mode",
+        "description": "Controls how the agent requests permission",
+        "category": "mode",
+        "type": "select",
+        "currentValue": "code",
+        "options": [
+          {
+            "value": "ask",
+            "name": "Ask",
+            "description": "Request permission before making any changes"
+          },
+          {
+            "value": "code",
+            "name": "Code",
+            "description": "Write and modify code with full tool access"
+          }
+        ]
+      },
+      {
+        "id": "model",
+        "name": "Model",
+        "category": "model",
+        "type": "select",
+        "currentValue": "model-1",
+        "options": [
+          {
+            "value": "model-1",
+            "name": "Model 1",
+            "description": "The fastest model"
+          },
+          {
+            "value": "model-2",
+            "name": "Model 2",
+            "description": "The most powerful model"
+          }
+        ]
+      },
+      {
+        "id": "context_size",
+        "name": "Context Size",
+        "category": "model_config",
+        "type": "select",
+        "currentValue": "200k",
+        "options": [
+          {
+            "value": "200k",
+            "name": "200K"
+          },
+          {
+            "value": "1m",
+            "name": "1M"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+> [!NOTE]
+>
+> The response always contains the **complete** configuration state, so Agents
+> can report dependent changes. For example, changing the model may change the
+> available reasoning options.
+
+### From the Agent
+
+The Agent can also change configuration options and notify the Client by sending a `config_option_update` session notification:
+
+```json theme={null}
+{
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+    "sessionId": "sess_abc123def456",
+    "update": {
+      "sessionUpdate": "config_option_update",
+      "configOptions": [
+        {
+          "id": "mode",
+          "name": "Session Mode",
+          "description": "Controls how the agent requests permission",
+          "category": "mode",
+          "type": "select",
+          "currentValue": "code",
+          "options": [
+            {
+              "value": "ask",
+              "name": "Ask",
+              "description": "Request permission before making any changes"
+            },
+            {
+              "value": "code",
+              "name": "Code",
+              "description": "Write and modify code with full tool access"
+            }
+          ]
+        },
+        {
+          "id": "model",
+          "name": "Model",
+          "category": "model",
+          "type": "select",
+          "currentValue": "model-2",
+          "options": [
+            {
+              "value": "model-1",
+              "name": "Model 1",
+              "description": "The fastest model"
+            },
+            {
+              "value": "model-2",
+              "name": "Model 2",
+              "description": "The most powerful model"
+            }
+          ]
+        },
+        {
+          "id": "context_size",
+          "name": "Context Size",
+          "category": "model_config",
+          "type": "select",
+          "currentValue": "200k",
+          "options": [
+            {
+              "value": "200k",
+              "name": "200K"
+            },
+            {
+              "value": "1m",
+              "name": "1M"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
+```
+
+This notification also contains the complete configuration state. Common reasons an Agent might update configuration options include:
+
+* Switching modes after completing a planning phase
+* Falling back to a different model due to rate limits or errors
+* Adjusting available options based on context discovered during execution
+
+## Relationship to session modes
+
+Session Config Options supersede the older [Session Modes](https://agentclientprotocol.com/protocol/v1/session-modes.md) API. However, during the transition period, Agents that provide mode-like configuration **SHOULD** send both:
+
+* `configOptions` with a `category: "mode"` option for Clients that support config options
+* `modes` for Clients that only support the older API
+
+If an Agent provides both `configOptions` and `modes` in the session response:
+
+* Clients that support config options **SHOULD** use `configOptions` exclusively and ignore `modes`
+* Clients that don't support config options **SHOULD** fall back to `modes`
+* Agents **SHOULD** keep both in sync to ensure consistent behavior regardless of which field the Client uses
+
+> [card]
+>
+> Learn about the Session Modes API
+>
+> [Open](https://agentclientprotocol.com/protocol/v1/session-modes.md)
+
+
+This documentation is built and hosted on [Mintlify](https://mintlify.com), a developer documentation platform.

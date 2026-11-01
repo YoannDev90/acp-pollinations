@@ -1,0 +1,76 @@
+> ## Documentation Index
+> Fetch the complete documentation index at: https://agentclientprotocol.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Cancellation
+
+> Mechanisms for request cancellation
+
+ACP uses JSON-RPC 2.0 for making requests and getting responses.
+
+The JSON-RPC specification doesn't define any standard mechanism for request cancellation and keeps it up to the implementation.
+
+## `$/cancel_request` notification
+
+To make cancellation consistent, ACP defines a `$/cancel_request` notification that can be sent to cancel requests.
+
+Cancellation remains optional as it might not be implementable in all clients or servers. For example if the implementation uses a single threaded synchronous programming language then there is little it can do to react to a `$/cancel_request` notification.
+
+When a `$/cancel_request` notification is received by a supporting implementation, the implementation:
+
+* **MAY** cancel the corresponding request activity and all nested activities related to that request
+* **MAY** finish sending any pending notifications before responding
+* **MUST** send one of these responses for the original request:
+  * A valid response with appropriate data, such as `session/prompt` with the `cancelled` stop reason or `session/request_permission` with the `cancelled` outcome
+  * An error response with code [`-32800` (Request Cancelled)](https://agentclientprotocol.com/protocol/v1/schema#errorcode)
+
+The calling side **MAY** implement graceful cancellation processing by waiting for the response from the remote side.
+
+Cancellation **MAY** also be done explicitly on a per-feature basis within the protocol to cover specific scenarios, such as cancellation of a [prompt turn](https://agentclientprotocol.com/protocol/v1/prompt-turn.md#cancellation).
+
+## Internal cancellation
+
+Requests can also be cancelled internally by the executing party without receiving `$/cancel_request`:
+
+* On the Client, the user closes the IDE or switches projects, or a file becomes unavailable.
+* On the Agent, the LLM context limit is reached, an internal timeout fires, or resources run out.
+
+When internal cancellation occurs, the executing party **SHOULD**:
+
+* Send the same `-32800` (Cancelled) error response as if `$/cancel_request` was received
+* Ensure consistent behavior regardless of cancellation source
+
+## Example: cascading cancellation flow
+
+This example shows an Agent explicitly propagating cancellation to an outstanding terminal request. That propagation is optional, not an automatic protocol guarantee. Independently, the Client **MUST** answer pending permission requests with the `cancelled` outcome when it sends `session/cancel`, as specified in [prompt turn cancellation](https://agentclientprotocol.com/protocol/v1/prompt-turn.md#cancellation). It does not wait for `$/cancel_request`.
+
+```mermaid theme={null}
+sequenceDiagram
+    participant Client
+    participant Agent
+
+    Note over Client,Agent: 1. Session prompt in progress
+    Client->>Agent: session/prompt (id=1, "Analyze file X")
+    Agent-->>Client: session/update (agent started processing)
+
+    Note over Client,Agent: 2. Agent makes concurrent requests
+    Agent->>Client: terminal/create (id=2, "grep pattern file.txt")
+    Agent->>Client: session/request_permission (id=3, "read sensitive file")
+
+    Note over Client,Agent: 3. Client cancels the prompt turn
+    Client->>Agent: session/cancel (sessionId)
+    Client->>Agent: response to id=3 (outcome: cancelled)
+
+    opt 4. Agent propagates cancellation to the terminal request
+        Agent->>Client: $/cancel_request (requestId=2)
+    end
+
+    Note over Client,Agent: 5. Terminal request is cancelled in this example
+    Client->>Agent: response to id=2 (error -32800 "Cancelled")
+
+    Note over Client,Agent: 6. Agent completes prompt cancellation
+    Agent->>Client: response to id=1 (stopReason: "cancelled")
+```
+
+
+This documentation is built and hosted on [Mintlify](https://mintlify.com), a developer documentation platform.

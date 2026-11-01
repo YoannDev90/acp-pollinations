@@ -1,0 +1,234 @@
+> ## Documentation Index
+> Fetch the complete documentation index at: https://agentclientprotocol.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Authentication
+
+> Authenticating with agents and logging out
+
+ACP authentication is negotiated during
+[initialization](https://agentclientprotocol.com/protocol/v1/initialization.md). Agents advertise available
+authentication methods in `authMethods`. Each authentication method type defines
+the flow a Client uses. Agents that support ending an authenticated state
+advertise the `logout` capability.
+
+```mermaid theme={null}
+sequenceDiagram
+    participant Client
+    participant Agent
+    participant Login as Interactive login process
+
+    Client->>Agent: initialize
+    Agent-->>Client: initialize response (authMethods, auth.logout)
+
+    alt Agent handles login
+        Client->>Agent: authenticate (methodId)
+        Agent-->>Client: authenticate response
+    else Terminal authentication
+        Client->>Login: launch configured Agent program
+        Login-->>Client: login succeeds
+        Client->>Agent: reconnect and initialize
+    end
+
+    Note over Client,Agent: Authenticated requests may proceed
+
+    alt User logs out
+        Client->>Agent: logout
+        Agent-->>Client: logout response
+    end
+
+    Note over Client,Agent: New sessions require authentication again
+```
+
+## Advertising authentication
+
+Agents advertise authentication options in the `authMethods` field of the
+`initialize` response. Every method has an `id`, but the Client sends that ID to
+`authenticate` only for a method whose type defines that protocol-driven flow.
+
+Agents that support `logout` also advertise `agentCapabilities.auth.logout`:
+
+```json highlight={7-11,12-18} theme={null}
+{
+  "jsonrpc": "2.0",
+  "id": 0,
+  "result": {
+    "protocolVersion": 1,
+    "agentCapabilities": {
+      "auth": {
+        "logout": {}
+      }
+    },
+    "authMethods": [
+      {
+        "id": "agent-login",
+        "name": "Agent login",
+        "description": "Sign in using the agent's login flow"
+      }
+    ]
+  }
+}
+```
+
+If `agentCapabilities.auth.logout` is omitted or `null`, the Agent does not
+support `logout` and Clients **MUST NOT** call it. Supplying `{}` means the Agent
+supports the method.
+
+### Authentication method types
+
+The default authentication method type is `agent`, where the Agent handles
+authentication itself. When no `type` is present, the method is treated as
+`agent`:
+
+```json theme={null}
+{
+  "id": "agent-login",
+  "name": "Agent login",
+  "description": "Sign in using the agent's login flow"
+}
+```
+
+The `terminal` type tells the Client to run the configured Agent program
+interactively:
+
+```json theme={null}
+{
+  "id": "terminal-login",
+  "name": "Log in from the terminal",
+  "type": "terminal",
+  "args": ["--login"],
+  "env": {
+    "ACP_INTERACTIVE_LOGIN": "1"
+  }
+}
+```
+
+Terminal methods require Client support. Clients advertise this during
+initialization with `clientCapabilities.auth.terminal`:
+
+```json highlight={7-9} theme={null}
+{
+  "jsonrpc": "2.0",
+  "id": 0,
+  "method": "initialize",
+  "params": {
+    "protocolVersion": 1,
+    "clientCapabilities": {
+      "auth": {
+        "terminal": true
+      }
+    }
+  }
+}
+```
+
+A Client advertises this capability only when it can reproduce the configured
+Agent invocation in an interactive terminal. An Agent may advertise a
+`terminal` method only when this capability is `true`.
+
+See the [schema](https://agentclientprotocol.com/protocol/v1/schema.md#authmethod) for the full
+`AuthMethod` definitions and the [Terminal Authentication
+RFD](https://agentclientprotocol.com/rfds/auth-methods.md) for the design.
+
+## Protocol-driven authentication
+
+When an Agent requires authentication and the selected method uses the
+protocol-driven flow, the Client calls `authenticate` with the advertised
+authentication method ID:
+
+```json theme={null}
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "authenticate",
+  "params": {
+    "methodId": "agent-login"
+  }
+}
+```
+
+**methodId** `string` *required*
+
+The ID of an advertised authentication method whose type defines the
+`authenticate` flow. Clients **MUST NOT** pass a `terminal` method.
+
+On success, the Agent returns an empty result:
+
+```json theme={null}
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {}
+}
+```
+
+After successful authentication, the Client can create new sessions without
+receiving an `auth_required` error for authentication-gated requests.
+
+## Terminal authentication
+
+For a `terminal` method, the Client:
+
+1. Launches a separate interactive process using the same configured Agent
+   program and base launch configuration as the ACP connection.
+2. Appends the method's `args` and applies its `env`, overriding any same-named
+   variables in the base launch configuration.
+3. Presents the terminal to the user and waits for the process to exit. Exit
+   status zero signals success. A non-zero status, termination without an exit
+   status, or cancellation signals failure.
+4. On success, reconnects and reinitializes the ACP Agent.
+
+The descriptor cannot provide a command. The Client derives the command from its
+own Agent configuration. Agents **SHOULD** provide arguments that enter a
+login-only flow and exit when it completes. ACP does not define an output
+pattern or other in-band success signal. Clients may recognize
+implementation-specific signals only as an extension. The terminal process is
+not the ACP connection, so the Client **MUST NOT** send an `authenticate`
+request for a terminal method.
+
+### Launch safety
+
+* Clients **SHOULD** pass `args` as separate arguments rather than building a shell command line from them, and **SHOULD NOT** offer terminal authentication when the launch target re-parses arguments, such as a remote shell or a Windows batch file.
+* Clients **SHOULD NOT** apply `env` entries that change program lookup, dynamic loading, interpreter or shell startup, or proxy and TLS trust without user approval. Examples include `PATH`, `LD_*`, `DYLD_*`, `NODE_OPTIONS`, `PYTHONPATH`, `BASH_ENV`, `HTTPS_PROXY`, and `SSL_CERT_FILE`.
+* Clients **SHOULD** show the appended `args` and `env` before launch. `env` values **SHOULD NOT** contain secrets.
+
+## Logging out
+
+The `logout` method allows Clients to end the current authenticated state.
+Clients should only call it after verifying the Agent advertised
+`agentCapabilities.auth.logout` during initialization.
+
+```json theme={null}
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "logout",
+  "params": {}
+}
+```
+
+On success, the Agent returns an empty result:
+
+```json theme={null}
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {}
+}
+```
+
+After a successful `logout`, new sessions that require authentication will
+require the user to complete one of the advertised authentication flows again.
+
+## Active sessions
+
+The protocol does not guarantee what happens to already-running sessions after
+`logout`. Agents may terminate them, keep them running, or return
+`auth_required` errors for future session activity.
+
+Clients **SHOULD** be prepared for active session operations to fail with
+authentication-related errors after logout and should prompt the user to
+authenticate again when appropriate.
+
+
+This documentation is built and hosted on [Mintlify](https://mintlify.com), a developer documentation platform.
