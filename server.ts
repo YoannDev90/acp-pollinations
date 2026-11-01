@@ -917,6 +917,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
           sessionId: session.id,
           cwd: session.cwd,
           roots: session.roots,
+          mode: session.mode,
           client,
           clientCapabilities: capabilities,
           signal,

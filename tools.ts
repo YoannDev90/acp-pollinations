@@ -35,6 +35,8 @@ export type ToolContext = {
   sessionId: string;
   /** Session working directory; also the default root for relative paths. */
   cwd: string;
+  /** Current session mode (build/plan/ask), when known. */
+  mode?: string;
   /** Absolute paths the session may touch: `cwd` plus additional directories. */
   roots: string[];
   client: AgentContext;
@@ -240,6 +242,9 @@ export async function executeTool(
 ): Promise<ToolExecutionResult> {
   const binding = ctx.mcpTools?.get(name);
   if (binding) {
+    if (binding.mutating && ctx.mode === "plan") {
+      return { output: "Plan mode: mutating tools are disabled.", isError: true };
+    }
     if (binding.mutating) {
       const approved = await ctx.approve({
         name,
@@ -258,6 +263,10 @@ export async function executeTool(
 
   const definition = TOOL_DEFINITIONS[name as ToolName];
   if (!definition) return { output: `Unknown tool: ${name}`, isError: true };
+
+  if (definition.mutating && ctx.mode === "plan") {
+    return { output: "Plan mode: mutating tools are disabled.", isError: true };
+  }
 
   if (definition.mutating) {
     const approved = await ctx.approve({
