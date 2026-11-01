@@ -754,6 +754,21 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
         return { stopReason: "end_turn" };
       }
 
+      if (promptText === "/clear" || promptText === "/clear") {
+        await replayUserPrompt(ctx.params.prompt, notify, session);
+        session.history = [systemMessage(session.cwd)];
+        session.lastPromptTokens = 0;
+        session.costSoFar = 0;
+        session.title = undefined;
+        await persist(session);
+        const text = "Conversation cleared.";
+        const messageId = nextMessageId(session);
+        await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
+        session.history.push({ role: "assistant", content: text });
+        await persist(session);
+        return { stopReason: "end_turn" };
+      }
+
       if (promptText === "/help" || promptText.startsWith("/help ")) {
         await replayUserPrompt(ctx.params.prompt, notify, session);
         const helpText = "Available commands:\n- /help  Show this help message.";
