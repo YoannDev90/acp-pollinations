@@ -86,7 +86,7 @@ All built-in tools are confined to the session workspace root set (symlinks reso
 |---|---|---|
 | stdio | ✅ | tools exposed to the model |
 | HTTP | ✅ | JSON-RPC over HTTP |
-| SSE | ❌ | not implemented |
+| SSE | ✅ | `mcpCapabilities.sse = true` |
 
 ## Other features
 

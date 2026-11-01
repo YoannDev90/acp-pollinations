@@ -20,7 +20,7 @@ Missing features from `COVERAGE.md`, sorted by priority.
 
 - [ ] **Elicitation** (`elicitation/create`): form and URL modes.
 - [x] **MCP HTTP transport** (`mcpCapabilities.http`).
-- [ ] **MCP SSE transport** (`mcpCapabilities.sse`).
+- [x] **MCP SSE transport** (`mcpCapabilities.sse`).
 - [ ] **Authentication methods** (`authMethods`, `auth/login`, `logout`): by design not supported (key lives on the machine).
 
 ## Notes
