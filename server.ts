@@ -55,6 +55,12 @@ const REASONING_LEVELS: ReadonlyArray<{ value: string; name: string }> = [
   { value: "high", name: "High" },
 ];
 
+const AVAILABLE_MODES: ReadonlyArray<{ id: string; name: string; description: string }> = [
+  { id: "build", name: "Build", description: "Implement changes" },
+  { id: "plan", name: "Plan", description: "Plan without editing" },
+  { id: "ask", name: "Ask", description: "Answer questions" },
+];
+
 export type CreatePollinationsAgentOptions = {
   config: AgentConfig;
   /** Injected LLM, for tests. Defaults to a real Pollinations client. */
@@ -77,6 +83,8 @@ type SessionState = {
   model: string;
   /** Reasoning effort chosen through the ACP reasoning selector. */
   reasoningLevel: string;
+  /** Current session mode (build/plan/ask). */
+  mode: string;
   /** Tools permanently allowed via an `allow_always` permission outcome. */
   allowedTools: Set<ToolName>;
   /** Aborts the in-flight prompt turn when the client cancels. */
@@ -211,6 +219,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       history: [systemMessage(roots[0] as string)],
       model,
       reasoningLevel: "medium",
+      mode: "build",
       allowedTools: new Set(),
       abort: null,
       messageCounter: 0,
@@ -240,6 +249,10 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     // The picker is what lets the client switch models mid-session.
     return {
       sessionId,
+      modes: {
+        currentModeId: "build",
+        availableModes: [...AVAILABLE_MODES],
+      },
       configOptions: [
         buildModelOption(await modelCatalog(), model),
         buildReasoningOption("medium"),
@@ -271,6 +284,10 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     const live = sessions.get(sessionId);
     if (live)
       return {
+        modes: {
+          currentModeId: live.mode,
+          availableModes: [...AVAILABLE_MODES],
+        },
         configOptions: [
           buildModelOption(await modelCatalog(), live.model),
           buildReasoningOption(live.reasoningLevel),
@@ -299,6 +316,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       history: rebaseHistory(stored.history, root, stored.cwd),
       model: stored.model,
       reasoningLevel: stored.reasoningLevel ?? "medium",
+      mode: stored.mode ?? "build",
       allowedTools: new Set(stored.allowedTools as ToolName[]),
       abort: null,
       messageCounter: stored.messageCounter,
@@ -340,6 +358,10 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     }
 
     return {
+      modes: {
+        currentModeId: session.mode,
+        availableModes: [...AVAILABLE_MODES],
+      },
       configOptions: [
         buildModelOption(await modelCatalog(), session.model),
         buildReasoningOption(session.reasoningLevel),
@@ -453,6 +475,27 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     );
   });
 
+  app.onRequest(methods.agent.session.setMode, async (ctx) => {
+    const session = sessions.get(ctx.params.sessionId);
+    if (!session) throw RequestError.sessionNotFound(ctx.params.sessionId);
+
+    const modeId = ctx.params.modeId;
+    if (!AVAILABLE_MODES.some((mode) => mode.id === modeId)) {
+      throw RequestError.invalidParams(
+        { modeId },
+        `Unknown mode "${modeId}". Available: ${AVAILABLE_MODES.map((mode) => mode.id).join(", ")}.`,
+      );
+    }
+
+    session.mode = modeId;
+    await persist(session);
+
+    const notify = createNotifier(ctx.client, session.id);
+    await notify({ sessionUpdate: "current_mode_update", currentModeId: modeId });
+
+    return {};
+  });
+
   app.onNotification(methods.agent.session.cancel, (ctx) => {
     sessions.get(ctx.params.sessionId)?.abort?.abort();
   });
@@ -543,6 +586,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       roots: session.roots,
       model: session.model,
       reasoningLevel: session.reasoningLevel,
+      mode: session.mode,
       allowedTools: [...session.allowedTools],
       messageCounter: session.messageCounter,
       lastPromptTokens: session.lastPromptTokens,

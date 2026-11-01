@@ -467,12 +467,12 @@ describe("model picker", () => {
     });
 
     await withInProcessClient(agent, { cwd: workspace.path }, async (harness) => {
-      expect(harness.session.newSessionResponse.configOptions).toHaveLength(1);
+      expect(harness.session.newSessionResponse.configOptions).toHaveLength(2);
       expect(reads).toBe(1);
 
       // A second session in the same agent reuses the cached catalogue.
       const second = await harness.ctx.buildSession(workspace.path).withSession(async (session) => {
-        expect(session.newSessionResponse.configOptions).toHaveLength(1);
+        expect(session.newSessionResponse.configOptions).toHaveLength(2);
         return session.sessionId;
       });
 

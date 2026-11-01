@@ -24,6 +24,8 @@ export type PersistedSession = {
   model: string;
   /** Reasoning effort chosen through the ACP reasoning selector. */
   reasoningLevel?: string;
+  /** Current session mode (build/plan/ask). */
+  mode?: string;
   allowedTools: string[];
   messageCounter: number;
   /**
@@ -281,6 +283,7 @@ function parseRecord(raw: string): PersistedSession | null {
       typeof record.reasoningLevel === "string" && record.reasoningLevel.length > 0
         ? record.reasoningLevel
         : undefined,
+    mode: typeof record.mode === "string" && record.mode.length > 0 ? record.mode : undefined,
     allowedTools: parseStringArray(record.allowedTools) ?? [],
     messageCounter:
       typeof record.messageCounter === "number" && Number.isFinite(record.messageCounter)
