@@ -91,6 +91,8 @@ type SessionState = {
   reasoningLevel: string;
   /** Current session mode (build/plan/ask). */
   mode: string;
+  /** Whether the session has been deleted during this turn. */
+  deleted?: boolean;
   /** Tools permanently allowed via an `allow_always` permission outcome. */
   allowedTools: Set<ToolName>;
   /** Aborts the in-flight prompt turn when the client cancels. */
@@ -830,6 +832,18 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
         return { stopReason: "end_turn" };
       }
 
+      if (promptText === "/delete" || promptText === "/delete") {
+        await replayUserPrompt(ctx.params.prompt, notify, session);
+        await store.remove(session.id);
+        for (const connection of session.mcpConnections) connection.close();
+        session.deleted = true;
+        sessions.delete(session.id);
+        const text = "Session deleted.";
+        const messageId = nextMessageId(session);
+        await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
+        return { stopReason: "end_turn" };
+      }
+
       if (promptText === "/help" || promptText.startsWith("/help ")) {
         await replayUserPrompt(ctx.params.prompt, notify, session);
         const helpText = "Available commands:\n- /help  Show this help message.";
@@ -928,7 +942,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       process.stderr.write(`${AGENT_TITLE}: prompt finished session=${session.id}\n`);
       // Persist after every turn, including cancelled and failed ones, so a
       // restart never rewinds a thread to an earlier point.
-      await persist(session);
+      if (!session.deleted) await persist(session);
     }
   });
 
