@@ -26,7 +26,7 @@ export function installFileLogger(home: string): string {
       const stamp = new Date().toISOString();
       // Prefix every line (including the first) with the timestamp, but only
       // in the file: the terminal keeps the original, unadorned output.
-      const stamped = text.replace(/^/gm, `[${stamp}] `);
+      const stamped = text.replace(/^(.+)/gm, `[${stamp}] $1`);
       appendFileSync(logFile, stamped);
     } catch {
       // Logging must never take down the agent.
