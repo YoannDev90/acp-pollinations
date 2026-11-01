@@ -662,7 +662,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
           messageId,
           content: { type: "text", text: statusText },
         });
-        session.history.push({ role: "assistant", content: statusText });
+        session.history.push({ role: "assistant", content: statusText, reasoning_content: "" });
         await persist(session);
         return { stopReason: "end_turn" };
       }
@@ -675,7 +675,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
           const text = `Current model: ${session.model}`;
           const messageId = nextMessageId(session);
           await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
-          session.history.push({ role: "assistant", content: text });
+          session.history.push({ role: "assistant", content: text, reasoning_content: "" });
           await persist(session);
           return { stopReason: "end_turn" };
         }
@@ -685,7 +685,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
           const text = `Unknown model "${requested}".`;
           const messageId = nextMessageId(session);
           await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
-          session.history.push({ role: "assistant", content: text });
+          session.history.push({ role: "assistant", content: text, reasoning_content: "" });
           await persist(session);
           return { stopReason: "end_turn" };
         }
@@ -695,7 +695,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
         const text = `Switched model to ${session.model}.`;
         const messageId = nextMessageId(session);
         await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
-        session.history.push({ role: "assistant", content: text });
+        session.history.push({ role: "assistant", content: text, reasoning_content: "" });
         await persist(session);
         return { stopReason: "end_turn" };
       }
@@ -708,7 +708,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
           const text = `Current mode: ${session.mode}`;
           const messageId = nextMessageId(session);
           await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
-          session.history.push({ role: "assistant", content: text });
+          session.history.push({ role: "assistant", content: text, reasoning_content: "" });
           await persist(session);
           return { stopReason: "end_turn" };
         }
@@ -716,7 +716,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
           const text = `Unknown mode "${requested}". Available: ${AVAILABLE_MODES.map((m) => m.id).join(", ")}.`;
           const messageId = nextMessageId(session);
           await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
-          session.history.push({ role: "assistant", content: text });
+          session.history.push({ role: "assistant", content: text, reasoning_content: "" });
           await persist(session);
           return { stopReason: "end_turn" };
         }
@@ -727,7 +727,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
         const text = `Switched mode to ${session.mode}.`;
         const messageId = nextMessageId(session);
         await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
-        session.history.push({ role: "assistant", content: text });
+        session.history.push({ role: "assistant", content: text, reasoning_content: "" });
         await persist(session);
         return { stopReason: "end_turn" };
       }
@@ -740,7 +740,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
           const text = `Current reasoning level: ${session.reasoningLevel}`;
           const messageId = nextMessageId(session);
           await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
-          session.history.push({ role: "assistant", content: text });
+          session.history.push({ role: "assistant", content: text, reasoning_content: "" });
           await persist(session);
           return { stopReason: "end_turn" };
         }
@@ -748,7 +748,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
           const text = `Unknown reasoning level "${requested}". Available: ${REASONING_LEVELS.map((l) => l.value).join(", ")}.`;
           const messageId = nextMessageId(session);
           await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
-          session.history.push({ role: "assistant", content: text });
+          session.history.push({ role: "assistant", content: text, reasoning_content: "" });
           await persist(session);
           return { stopReason: "end_turn" };
         }
@@ -761,7 +761,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
         const text = `Switched reasoning level to ${session.reasoningLevel}.`;
         const messageId = nextMessageId(session);
         await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
-        session.history.push({ role: "assistant", content: text });
+        session.history.push({ role: "assistant", content: text, reasoning_content: "" });
         await persist(session);
         return { stopReason: "end_turn" };
       }
@@ -776,7 +776,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
         const text = "Conversation cleared.";
         const messageId = nextMessageId(session);
         await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
-        session.history.push({ role: "assistant", content: text });
+        session.history.push({ role: "assistant", content: text, reasoning_content: "" });
         await persist(session);
         return { stopReason: "end_turn" };
       }
@@ -786,7 +786,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
         const text = `Tokens (last request): ${session.lastPromptTokens}\nCost so far: ${session.costSoFar.toFixed(6)} USD`;
         const messageId = nextMessageId(session);
         await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
-        session.history.push({ role: "assistant", content: text });
+        session.history.push({ role: "assistant", content: text, reasoning_content: "" });
         await persist(session);
         return { stopReason: "end_turn" };
       }
@@ -800,7 +800,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
         const text = `Built-in tools: ${builtin.join(", ")}\nMCP tools: ${mcp.length ? mcp.join(", ") : "(none)"}`;
         const messageId = nextMessageId(session);
         await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
-        session.history.push({ role: "assistant", content: text });
+        session.history.push({ role: "assistant", content: text, reasoning_content: "" });
         await persist(session);
         return { stopReason: "end_turn" };
       }
@@ -811,7 +811,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
           const text = "Nothing to compact.";
           const messageId = nextMessageId(session);
           await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
-          session.history.push({ role: "assistant", content: text });
+          session.history.push({ role: "assistant", content: text, reasoning_content: "" });
           await persist(session);
           return { stopReason: "end_turn" };
         }
@@ -824,7 +824,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
         const text = summary ? "Compacted." : "Compaction failed.";
         const messageId = nextMessageId(session);
         await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
-        session.history.push({ role: "assistant", content: text });
+        session.history.push({ role: "assistant", content: text, reasoning_content: "" });
         await persist(session);
         return { stopReason: "end_turn" };
       }
@@ -837,7 +837,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
           : "No persisted sessions.";
         const messageId = nextMessageId(session);
         await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
-        session.history.push({ role: "assistant", content: text });
+        session.history.push({ role: "assistant", content: text, reasoning_content: "" });
         await persist(session);
         return { stopReason: "end_turn" };
       }
@@ -875,7 +875,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
           messageId,
           content: { type: "text", text: helpText },
         });
-        session.history.push({ role: "assistant", content: helpText });
+        session.history.push({ role: "assistant", content: helpText, reasoning_content: "" });
         await persist(session);
         return { stopReason: "end_turn" };
       }
@@ -1260,7 +1260,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       }));
 
     const assistantMessage: LlmMessage = { role: "assistant", content: text || null };
-    if (reasoning) assistantMessage.reasoning_content = reasoning;
+    assistantMessage.reasoning_content = reasoning;
     if (calls.length > 0) assistantMessage.tool_calls = calls.map(({ call }) => call);
     session.history.push(assistantMessage);
 
