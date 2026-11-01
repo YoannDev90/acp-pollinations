@@ -820,9 +820,9 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       await notify({
         sessionUpdate: "usage_update",
         used: usage.promptTokens,
-        size: info?.contextLength ?? 0,
+        size: info?.contextLength ?? 128_000,
         ...(session.costSoFar > 0
-          ? { cost: { amount: session.costSoFar, currency: "pollen" } }
+          ? { cost: { amount: session.costSoFar, currency: "USD" } }
           : {}),
       });
     }
