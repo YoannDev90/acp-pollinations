@@ -248,10 +248,14 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     const connections = await connectMcpServers(ctx.params.mcpServers ?? []);
 
     const notify = createNotifier(ctx.client, sessionId);
-    await notify({
-      sessionUpdate: "available_commands_update",
-      availableCommands: [...AVAILABLE_COMMANDS],
-    });
+    // Defer so the client has attached its session-update handler before the
+    // notification arrives (some clients drop early notifications).
+    setTimeout(() => {
+      void notify({
+        sessionUpdate: "available_commands_update",
+        availableCommands: [...AVAILABLE_COMMANDS],
+      });
+    }, 50);
     session.mcpConnections = connections;
     const merged = mergeMcpBindings(connections);
     session.mcpTools = merged.bindings;
