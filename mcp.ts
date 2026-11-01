@@ -10,10 +10,13 @@ const MAX_MCP_OUTPUT_CHARS = 20_000;
 export type McpEnvVar = { name: string; value: string };
 
 export type McpServerConfig = {
+  type?: "stdio" | "http" | "sse";
   name?: string;
-  command: string;
+  command?: string;
   args?: string[];
   env?: McpEnvVar[] | Record<string, string>;
+  url?: string;
+  headers?: Record<string, string> | Array<{ name: string; value: string }>;
 };
 
 export type McpTool = {
@@ -68,7 +71,7 @@ function sanitizeName(value: string): string {
 
 export async function connectMcpServer(config: McpServerConfig): Promise<McpConnection> {
   const serverName = config.name?.trim() || config.command;
-  const child = spawn(config.command, config.args ?? [], {
+  const child = spawn(config.command as string, config.args ?? [], {
     stdio: ["pipe", "pipe", "pipe"],
     env: { ...process.env, ...envToRecord(config.env) },
   });
@@ -243,7 +246,179 @@ export async function connectMcpServer(config: McpServerConfig): Promise<McpConn
     }
   };
 
-  return { name: serverName, tools, bindings, toolDefinitions, close };
+  return { name: serverName as string, tools, bindings, toolDefinitions, close };
+}
+
+function headersToRecord(headers: McpServerConfig["headers"]): Record<string, string> {
+  if (!headers) return {};
+  if (Array.isArray(headers)) {
+    const out: Record<string, string> = {};
+    for (const entry of headers) {
+      if (entry && typeof entry.name === "string") out[entry.name] = String(entry.value ?? "");
+    }
+    return out;
+  }
+  return { ...headers };
+}
+
+export async function connectHttpMcpServer(config: McpServerConfig): Promise<McpConnection> {
+  const serverName = config.name?.trim() || config.url || "mcp-http";
+  const url = config.url as string;
+  const baseHeaders = headersToRecord(config.headers);
+
+  let sessionId: string | undefined;
+  let nextId = 1;
+  const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
+
+  async function send(method: string, params: Record<string, unknown> | null): Promise<unknown> {
+    const id = nextId++;
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+      ...baseHeaders,
+    };
+    if (sessionId) headers["Mcp-Session-Id"] = sessionId;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ jsonrpc: "2.0", id, method, params: params ?? {} }),
+    });
+
+    const sid = response.headers.get("mcp-session-id");
+    if (sid) sessionId = sid;
+
+    if (!response.ok) {
+      throw new Error(`MCP request "${method}" failed (${response.status})`);
+    }
+
+    const contentType = response.headers.get("content-type") ?? "";
+    let result: { id?: number; result?: unknown; error?: { message?: string } } | null = null;
+
+    if (contentType.includes("text/event-stream")) {
+      const text = await response.text();
+      for (const line of text.split(/\r?\n/)) {
+        if (!line.startsWith("data:")) continue;
+        const data = line.slice(5).trim();
+        if (!data || data === "[DONE]") continue;
+        try {
+          const parsed = JSON.parse(data) as { id?: number; result?: unknown; error?: { message?: string } };
+          if (parsed.id === id) {
+            result = parsed;
+            break;
+          }
+        } catch {
+          // ignore non-JSON frames
+        }
+      }
+    } else {
+      result = (await response.json()) as { id?: number; result?: unknown; error?: { message?: string } };
+    }
+
+    if (!result) throw new Error(`MCP request "${method}" returned no response`);
+    if (result.error) throw new Error(result.error.message ?? "MCP request failed");
+    return result.result;
+  }
+
+  const tools: McpTool[] = [];
+  const bindings = new Map<string, McpToolBinding>();
+  const toolDefinitions: LlmToolDefinition[] = [];
+
+  try {
+    await send("initialize", {
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "acp-pollinations", version: "1.0.0" },
+    });
+    try {
+      await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...baseHeaders, ...(sessionId ? { "Mcp-Session-Id": sessionId } : {}) },
+        body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }),
+      });
+    } catch {
+      // ignore
+    }
+
+    const rawTools: unknown[] = [];
+    let cursor: string | undefined;
+    do {
+      const listed = (await send("tools/list", cursor ? { cursor } : {})) as
+        | { tools?: unknown; nextCursor?: unknown }
+        | null;
+      if (Array.isArray(listed?.tools)) rawTools.push(...(listed.tools as unknown[]));
+      cursor = typeof listed?.nextCursor === "string" ? listed.nextCursor : undefined;
+    } while (cursor);
+
+    for (const raw of rawTools) {
+      if (typeof raw !== "object" || raw === null) continue;
+      const tool = raw as McpTool;
+      if (typeof tool.name !== "string" || tool.name.length === 0) continue;
+      tools.push(tool);
+
+      const bindingName = tool.name;
+      const readOnly = tool.annotations?.readOnlyHint === true;
+      const mutating = !readOnly;
+      const kind: ToolKind = readOnly ? "read" : "other";
+      const parameters =
+        typeof tool.inputSchema === "object" && tool.inputSchema !== null
+          ? (tool.inputSchema as Record<string, unknown>)
+          : { type: "object", properties: {} };
+
+      const binding: McpToolBinding = {
+        name: bindingName,
+        kind,
+        mutating,
+        title: (input) => `${serverName}: ${tool.name}`,
+        call: async (input) => {
+          try {
+            const result = (await send("tools/call", {
+              name: tool.name,
+              arguments: input,
+            })) as { content?: unknown; isError?: boolean } | null;
+            let text = "";
+            if (Array.isArray(result?.content)) {
+              text = (result.content as Array<{ type?: string; text?: string }>)
+                .map((entry) => (entry?.type === "text" ? String(entry.text ?? "") : JSON.stringify(entry)))
+                .join("\\n");
+            } else if (result && typeof result === "object") {
+              text = JSON.stringify(result);
+            } else if (typeof result === "string") {
+              text = result;
+            }
+            const output = text || "(no output)";
+            const clipped =
+              output.length <= MAX_MCP_OUTPUT_CHARS
+                ? output
+                : `${output.slice(0, MAX_MCP_OUTPUT_CHARS)}\\n… output truncated (${output.length} characters total)`;
+            return { output: clipped, isError: result?.isError === true };
+          } catch (error) {
+            return { output: error instanceof Error ? error.message : String(error), isError: true };
+          }
+        },
+      };
+
+      bindings.set(bindingName, binding);
+      toolDefinitions.push({
+        type: "function",
+        function: {
+          name: bindingName,
+          description: tool.description ?? `MCP tool ${tool.name} from ${serverName}`,
+          parameters,
+        },
+      });
+    }
+  } catch (error) {
+    process.stderr.write(
+      `${serverName}: MCP HTTP connection failed (${error instanceof Error ? error.message : String(error)})\\n`,
+    );
+  }
+
+  const close = () => {
+    // stateless: nothing to close
+  };
+
+  return { name: serverName as string, tools, bindings, toolDefinitions, close };
 }
 
 export function isStdioMcpServer(value: unknown): value is McpServerConfig {
@@ -253,14 +428,36 @@ export function isStdioMcpServer(value: unknown): value is McpServerConfig {
   return typeof record.command === "string" && record.command.length > 0;
 }
 
-export function normalizeMcpServer(value: unknown): McpServerConfig | null {
-  if (!isStdioMcpServer(value)) return null;
+export function isHttpMcpServer(value: unknown): value is McpServerConfig {
+  if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
-  const name = typeof record.name === "string" ? record.name : undefined;
-  const command = record.command as string;
-  const args = Array.isArray(record.args) ? record.args.map(String) : [];
-  const env = record.env as McpServerConfig["env"];
-  return { name, command, args, env };
+  if (typeof record.type === "string" && record.type !== "http" && record.type !== "sse") return false;
+  if (record.type !== "http" && record.type !== "sse" && record.type !== undefined) return false;
+  // http/sse servers are identified by a url rather than a command
+  if (typeof record.url !== "string" || record.url.length === 0) return false;
+  return record.type === "http" || record.type === "sse" || record.type === undefined;
+}
+
+export function normalizeMcpServer(value: unknown): McpServerConfig | null {
+  if (isStdioMcpServer(value)) {
+    const record = value as Record<string, unknown>;
+    const name = typeof record.name === "string" ? record.name : undefined;
+    const command = record.command as string;
+    const args = Array.isArray(record.args) ? record.args.map(String) : [];
+    const env = record.env as McpServerConfig["env"];
+    return { type: "stdio", name, command, args, env };
+  }
+
+  if (isHttpMcpServer(value)) {
+    const record = value as Record<string, unknown>;
+    const name = typeof record.name === "string" ? record.name : undefined;
+    const url = record.url as string;
+    const type = record.type === "sse" ? "sse" : "http";
+    const headers = record.headers as McpServerConfig["headers"];
+    return { type, name, url, headers };
+  }
+
+  return null;
 }
 
 export async function connectMcpServers(servers: unknown[]): Promise<McpConnection[]> {
@@ -269,11 +466,18 @@ export async function connectMcpServers(servers: unknown[]): Promise<McpConnecti
     const config = normalizeMcpServer(server);
     if (!config) continue;
     try {
-      const connection = await connectMcpServer(config);
+      const connection =
+        config.type === "http" || config.type === "sse"
+          ? await connectHttpMcpServer(config)
+          : await connectMcpServer(config);
       connections.push(connection);
     } catch (error) {
+      const target =
+        config.type === "http" || config.type === "sse"
+          ? (config.url as string)
+          : (config.command as string);
       process.stderr.write(
-        `MCP: failed to connect to ${config.command}: ${error instanceof Error ? error.message : String(error)}\n`,
+        `MCP: failed to connect to ${target}: ${error instanceof Error ? error.message : String(error)}\n`,
       );
     }
   }
