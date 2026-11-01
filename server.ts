@@ -456,12 +456,13 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
 
       session.model = value;
       await persist(session);
-      return {
-        configOptions: [
-          buildModelOption(models, value),
-          buildReasoningOption(session.reasoningLevel),
-        ],
-      };
+      const configOptions = [
+        buildModelOption(models, value),
+        buildReasoningOption(session.reasoningLevel),
+      ];
+      const notify = createNotifier(ctx.client, session.id);
+      await notify({ sessionUpdate: "config_option_update", configOptions });
+      return { configOptions };
     }
 
     if (configId === REASONING_CONFIG_ID) {
@@ -475,12 +476,13 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       session.reasoningLevel = value;
       await persist(session);
       const models = await modelCatalog();
-      return {
-        configOptions: [
-          buildModelOption(models, session.model),
-          buildReasoningOption(value),
-        ],
-      };
+      const configOptions = [
+        buildModelOption(models, session.model),
+        buildReasoningOption(value),
+      ];
+      const notify = createNotifier(ctx.client, session.id);
+      await notify({ sessionUpdate: "config_option_update", configOptions });
+      return { configOptions };
     }
 
     throw RequestError.invalidParams(
