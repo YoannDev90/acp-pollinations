@@ -81,6 +81,8 @@ type SessionState = {
   history: LlmMessage[];
   /** Model chosen through the ACP model picker, or the configured default. */
   model: string;
+  /** Human-readable title derived from the first prompt. */
+  title?: string;
   /** Reasoning effort chosen through the ACP reasoning selector. */
   reasoningLevel: string;
   /** Current session mode (build/plan/ask). */
@@ -218,6 +220,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       roots,
       history: [systemMessage(roots[0] as string)],
       model,
+      title: undefined,
       reasoningLevel: "medium",
       mode: "build",
       allowedTools: new Set(),
@@ -315,6 +318,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       roots: loadedRoots,
       history: rebaseHistory(stored.history, root, stored.cwd),
       model: stored.model,
+      title: stored.title,
       reasoningLevel: stored.reasoningLevel ?? "medium",
       mode: stored.mode ?? "build",
       allowedTools: new Set(stored.allowedTools as ToolName[]),
@@ -526,6 +530,15 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
 
       await replayUserPrompt(ctx.params.prompt, notify, session);
 
+      if (!session.title) {
+        const firstText = promptToText(ctx.params.prompt);
+        session.title = firstText.split("\n")[0]?.slice(0, 80) || "New session";
+        await notify({
+          sessionUpdate: "session_info_update",
+          title: session.title,
+        });
+      }
+
       let stopReason: PromptResponse["stopReason"] = "max_turn_requests";
 
       for (let request = 0; request < config.maxTurnRequests; request += 1) {
@@ -585,6 +598,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       cwd: session.cwd,
       roots: session.roots,
       model: session.model,
+      title: session.title,
       reasoningLevel: session.reasoningLevel,
       mode: session.mode,
       allowedTools: [...session.allowedTools],

@@ -22,6 +22,8 @@ export type PersistedSession = {
   cwd: string;
   roots: string[];
   model: string;
+  /** Human-readable title derived from the first prompt. */
+  title?: string;
   /** Reasoning effort chosen through the ACP reasoning selector. */
   reasoningLevel?: string;
   /** Current session mode (build/plan/ask). */
@@ -279,6 +281,7 @@ function parseRecord(raw: string): PersistedSession | null {
     cwd: record.cwd,
     roots,
     model: record.model,
+    title: typeof record.title === "string" && record.title.length > 0 ? record.title : undefined,
     reasoningLevel:
       typeof record.reasoningLevel === "string" && record.reasoningLevel.length > 0
         ? record.reasoningLevel
