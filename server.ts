@@ -33,6 +33,7 @@ import type { CatalogModel } from "./models.js";
 import { createSessionStore } from "./sessions.js";
 import type { PersistedSession } from "./sessions.js";
 import { LLM_TOOLS, TOOL_DEFINITIONS, ToolError, executeTool } from "./tools.js";
+import { promptToText, rebaseHistory, systemMessage } from "./messages.js";
 import type { ToolContext, ToolExecutionResult, ToolName } from "./tools.js";
 import {
   connectMcpServers,
@@ -44,6 +45,8 @@ import {
 export const AGENT_NAME = "pollinations";
 export const AGENT_TITLE = "Pollinations";
 export const AGENT_VERSION = "1.0.0";
+
+export { promptToText } from "./messages.js";
 
 /** Config option id for the reasoning/thought-level selector. */
 const REASONING_CONFIG_ID = "reasoning";
@@ -1005,23 +1008,6 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
   }
 
   /**
-   * Rebuilds the leading system message when the workspace changed.
-   *
-   * That message names the working directory, so a thread reopened from a
-   * moved project would otherwise keep telling the model it works somewhere it
-   * does not, and the path guard would reject everything it tries to touch.
-   */
-  function rebaseHistory(
-    history: LlmMessage[],
-    cwd: string,
-    previousCwd: string,
-  ): LlmMessage[] {
-    const hasSystem = history[0]?.role === "system";
-    if (hasSystem && resolve(previousCwd) === resolve(cwd)) return history;
-    return [systemMessage(cwd), ...(hasSystem ? history.slice(1) : history)];
-  }
-
-  /**
    * Summarises a transcript that has grown past the configured threshold.
    *
    * The replacement keeps the session's system message and adds one assistant
@@ -1443,49 +1429,6 @@ function createNotifier(client: AgentContext, sessionId: string): Notifier {
 function nextMessageId(session: SessionState): string {
   session.messageCounter += 1;
   return `msg_${session.id}_${session.messageCounter}`;
-}
-
-/** Renders the prompt's content blocks as one text message for the model. */
-export function promptToText(blocks: ContentBlock[]): string {
-  const parts: string[] = [];
-
-  for (const block of blocks) {
-    switch (block.type) {
-      case "text":
-        parts.push(block.text);
-        break;
-      case "resource":
-        parts.push(
-          `--- ${block.resource.uri} ---\n` +
-            ("text" in block.resource ? block.resource.text : "(binary resource)"),
-        );
-        break;
-      case "resource_link":
-        parts.push(`--- ${block.uri} (${block.name}) ---`);
-        break;
-      default:
-        parts.push(`[${block.type} content is not supported by this agent]`);
-    }
-  }
-
-  return parts.join("\n\n").trim() || "(empty prompt)";
-}
-
-function systemMessage(cwd: string): LlmMessage {
-  return {
-    role: "system",
-    content: [
-      "You are Pollinations, a coding agent running inside the user's editor over the Agent Client Protocol.",
-      `The session workspace is \`${cwd}\`. Every path you touch must stay inside it.`,
-      "",
-      "How to work:",
-      "- Explore before you edit: list the directory or read a file instead of guessing its contents.",
-      "- Prefer `edit_file` for small changes and `write_file` for new or fully rewritten files.",
-      "- Use `bash` to build, lint, and test; check the exit code before claiming success.",
-      "- Keep answers short and in the user's language. Use Markdown for anything longer than two sentences.",
-      "- Never invent file paths, APIs, or results you did not observe.",
-    ].join("\n"),
-  };
 }
 
 function toToolCallContent(result: ToolExecutionResult): ToolCallContent[] {
