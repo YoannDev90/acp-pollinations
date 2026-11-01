@@ -19,9 +19,9 @@ Missing features from `COVERAGE.md`, sorted by priority.
 ## P3 — Low (advanced / optional)
 
 - [ ] **Elicitation** (`elicitation/create`): form and URL modes.
-- [ ] **MCP HTTP transport** (`mcpCapabilities.http`).
+- [x] **MCP HTTP transport** (`mcpCapabilities.http`).
 - [ ] **MCP SSE transport** (`mcpCapabilities.sse`).
-- [ ] **Authentication methods** (`authMethods`, `auth/login`, `logout`): only if multi-user/remote use is needed.
+- [ ] **Authentication methods** (`authMethods`, `auth/login`, `logout`): by design not supported (key lives on the machine).
 
 ## Notes
 
