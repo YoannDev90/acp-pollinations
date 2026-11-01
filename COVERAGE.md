@@ -96,7 +96,7 @@ All built-in tools are confined to the session workspace root set (symlinks reso
 | Session persistence | ✅ | atomic writes, validated on read |
 | Session listing / deletion | ✅ | |
 | Context usage + cost reporting | ✅ | `usage_update` |
-| Slash commands | ⚠️ | only `/help` advertised |
+| Slash commands | ✅ | `/help` handled locally and advertised |
 | Elicitation | ❌ | not implemented |
 | Authentication methods | ❌ | by design: key lives on the machine |
 | Additional workspace roots | ✅ | |

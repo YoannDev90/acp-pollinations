@@ -38,8 +38,7 @@ Both `npm run typecheck` and `npm test` must pass before opening a PR.
 ## Documentation references
 
 - `README.md` — setup, configuration, features.
-- `COVERAGE.md` — ACP v1 feature coverage.
-- `TODO.md` — prioritized list of missing features.
+- `COVERAGE.md` — ACP v1 feature coverage (all items implemented).
 - `CONTRIBUTING.md` — setup, checks, conventions.
 - `docs/acp-v1/` — exported ACP v1 protocol documentation.
 - `docs/acp-v1/prompt-turn.md` — prompt lifecycle, `usage_update`, compaction.
