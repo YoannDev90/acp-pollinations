@@ -23,6 +23,7 @@ export {
 } from "./config.js";
 export type { AgentConfig, ResolveConfigOptions } from "./config.js";
 
+export { installFileLogger } from "./logger.js";
 export { LlmError, PollinationsLlm } from "./llm.js";
 export type {
   LlmChatParams,

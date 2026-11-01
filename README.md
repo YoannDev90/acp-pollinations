@@ -62,7 +62,9 @@ node dist/bin/pollinations-acp-server.js
 
 The agent reads ACP requests from stdin and writes responses to stdout. A
 startup banner and any diagnostics go to stderr, so the JSON-RPC stream on
-stdout stays clean.
+stdout stays clean. The same output is also appended to
+`$POLLINATIONS_HOME/logs/pollinations-acp-server.log` (see
+[Logging](#logging)).
 
 ## Authentication
 
@@ -135,6 +137,20 @@ All configuration is via environment variables (see `resolveConfig`):
 | `ACP_COMPACTION_THRESHOLD_TOKENS` | `50000` | Prompt tokens at or above which a transcript is summarised; `0` disables compaction. |
 | `ACP_PERMISSION_MODE` | `ask` | `ask` prompts before mutating the workspace; `allow` skips permission requests (CI/demos). |
 | `POLLINATIONS_HOME` | `~/.pollinations` | Directory holding `credentials.json` and the persisted sessions. |
+
+## Logging
+
+All diagnostics (startup banner, catalogue failures, persistence errors, MCP
+server output, …) are written to stderr **and** appended to
+
+```
+$POLLINATIONS_HOME/logs/pollinations-acp-server.log
+```
+
+(That is `~/.pollinations/logs/pollinations-acp-server.log` by default.) The
+file is created on startup and grows across runs, so an agent launched by an
+editor that swallows stderr can still be debugged after the fact. Set
+`POLLINATIONS_HOME` to redirect both sessions and logs to another directory.
 
 ## Model picker
 
