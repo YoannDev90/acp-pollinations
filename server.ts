@@ -181,7 +181,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
         loadSession: true,
         promptCapabilities: { embeddedContext: true },
         mcpCapabilities: { http: false, sse: false },
-        sessionCapabilities: { list: {}, delete: {} },
+        sessionCapabilities: { list: {}, delete: {}, close: {}, resume: {} },
       },
       agentInfo: { name: AGENT_NAME, title: AGENT_TITLE, version: AGENT_VERSION },
     };
@@ -384,6 +384,86 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
   });
 
   /* ---------------------------------------------------------------- *
+   * Session resume (restore without replay)
+   * ---------------------------------------------------------------- */
+  app.onRequest(methods.agent.session.resume, async (ctx) => {
+    const { sessionId, cwd } = ctx.params;
+    if (typeof cwd !== "string" || cwd.length === 0 || !isAbsolute(cwd)) {
+      throw RequestError.invalidParams({ cwd }, "`cwd` must be an absolute path");
+    }
+    if (!config.apiKey) {
+      throw new RequestError(
+        -32000,
+        "No Pollinations API key configured. Set POLLINATIONS_API_KEY or run `polli auth login`.",
+      );
+    }
+
+    const live = sessions.get(sessionId);
+    if (live) {
+      return {
+        modes: { currentModeId: live.mode, availableModes: [...AVAILABLE_MODES] },
+        configOptions: [
+          buildModelOption(await modelCatalog(), live.model),
+          buildReasoningOption(live.reasoningLevel),
+        ],
+      };
+    }
+
+    const stored = await store.load(sessionId);
+    if (!stored) throw RequestError.sessionNotFound(sessionId);
+
+    const loadedRoots = [resolve(cwd)];
+    for (const directory of ctx.params.additionalDirectories ?? []) {
+      if (!isAbsolute(directory)) {
+        throw RequestError.invalidParams(
+          { additionalDirectories: directory },
+          "`additionalDirectories` entries must be absolute paths",
+        );
+      }
+      loadedRoots.push(resolve(directory));
+    }
+
+    const root = loadedRoots[0] as string;
+    const session: SessionState = {
+      id: sessionId,
+      cwd: root,
+      roots: loadedRoots,
+      history: rebaseHistory(stored.history, root, stored.cwd),
+      model: stored.model,
+      title: stored.title,
+      reasoningLevel: stored.reasoningLevel ?? "medium",
+      mode: stored.mode ?? "build",
+      allowedTools: new Set(stored.allowedTools as ToolName[]),
+      abort: null,
+      messageCounter: stored.messageCounter,
+      lastPromptTokens: stored.lastPromptTokens,
+      costSoFar: 0,
+      mcpConnections: [],
+      mcpTools: new Map(),
+      mcpToolDefinitions: [],
+    };
+    sessions.set(sessionId, session);
+
+    const connections = await connectMcpServers(ctx.params.mcpServers ?? []);
+    session.mcpConnections = connections;
+    const merged = mergeMcpBindings(connections);
+    session.mcpTools = merged.bindings;
+    session.mcpToolDefinitions = merged.definitions;
+
+    process.stderr.write(
+      `${AGENT_TITLE}: session/resume id=${sessionId} cwd=${root} restoredMessages=${session.history.length}\n`,
+    );
+
+    return {
+      modes: { currentModeId: session.mode, availableModes: [...AVAILABLE_MODES] },
+      configOptions: [
+        buildModelOption(await modelCatalog(), session.model),
+        buildReasoningOption(session.reasoningLevel),
+      ],
+    };
+  });
+
+  /* ---------------------------------------------------------------- *
    * Session listing and deletion
    * ---------------------------------------------------------------- */
 
@@ -407,6 +487,16 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       })),
       ...(nextCursor ? { nextCursor } : {}),
     };
+  });
+
+  app.onRequest(methods.agent.session.close, async (ctx) => {
+    const { sessionId } = ctx.params;
+    const live = sessions.get(sessionId);
+    live?.abort?.abort();
+    for (const connection of live?.mcpConnections ?? []) connection.close();
+    sessions.delete(sessionId);
+    process.stderr.write(`${AGENT_TITLE}: session/close id=${sessionId}\n`);
+    return {};
   });
 
   app.onRequest(methods.agent.session.delete, async (ctx) => {
