@@ -779,6 +779,20 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
         return { stopReason: "end_turn" };
       }
 
+      if (promptText === "/tools" || promptText === "/tools") {
+        await replayUserPrompt(ctx.params.prompt, notify, session);
+        const builtin = [
+          "read_file", "write_file", "edit_file", "list_dir", "glob", "grep", "bash",
+        ];
+        const mcp = [...session.mcpTools.keys()];
+        const text = `Built-in tools: ${builtin.join(", ")}\nMCP tools: ${mcp.length ? mcp.join(", ") : "(none)"}`;
+        const messageId = nextMessageId(session);
+        await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
+        session.history.push({ role: "assistant", content: text });
+        await persist(session);
+        return { stopReason: "end_turn" };
+      }
+
       if (promptText === "/help" || promptText.startsWith("/help ")) {
         await replayUserPrompt(ctx.params.prompt, notify, session);
         const helpText = "Available commands:\n- /help  Show this help message.";
