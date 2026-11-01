@@ -580,6 +580,14 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       process.stderr.write(
         `${AGENT_TITLE}: prompt error session=${session.id}: ${(error as Error).message}\n`,
       );
+      if (capabilities?.session?.notices) {
+        await notify({
+          sessionUpdate: "notice",
+          severity: "error",
+          title: "Turn failed",
+          description: (error as Error).message,
+        });
+      }
       if (abort.signal.aborted) return { stopReason: "cancelled" };
       throw toRequestError(error);
     } finally {
@@ -703,6 +711,14 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       process.stderr.write(
         `${AGENT_TITLE}: compaction failed session=${session.id}: ${(error as Error).message}\n`,
       );
+      if (capabilities?.session?.notices) {
+        await notify({
+          sessionUpdate: "notice",
+          severity: "warning",
+          title: "Compaction failed",
+          description: (error as Error).message,
+        });
+      }
       if (reportable) {
         await notify({
           sessionUpdate: "compaction_update",
