@@ -306,12 +306,28 @@ export function inferGroup(id: string): ModelGroup {
  */
 export function classifyTier(entry: {
   paid_only?: unknown;
+  agent?: unknown;
+  community?: unknown;
   pricing?: { promptTextTokens?: unknown; completionTextTokens?: unknown } | null;
 }): PricingTier {
   if (entry.paid_only === true) return "paid";
   const prompt = numberOr(entry.pricing?.promptTextTokens, null);
   const completion = numberOr(entry.pricing?.completionTextTokens, null);
-  return prompt === 0 && completion === 0 ? "free" : "quest";
+  // An explicit 0 in / 0 out is free for everyone, including official models
+  // (which groupOf then downgrades to quest).
+  if (prompt === 0 && completion === 0) return "free";
+  // A community model that publishes no price at all is treated as free, so
+  // users are not charged for an unstated amount. Agent models (agent: true)
+  // are excluded: they are wrappers around a base model and keep its pricing.
+  if (
+    entry.community === true &&
+    entry.agent !== true &&
+    prompt === null &&
+    completion === null
+  ) {
+    return "free";
+  }
+  return "quest";
 }
 
 /* ------------------------------------------------------------------ *
@@ -329,6 +345,7 @@ type RawModelEntry = {
   supported_endpoints?: unknown;
   paid_only?: unknown;
   community?: unknown;
+  agent?: unknown;
   context_length?: unknown;
   pricing?: { promptTextTokens?: unknown; completionTextTokens?: unknown } | null;
   health?: { status?: unknown; success_rate?: unknown; requests?: unknown } | null;

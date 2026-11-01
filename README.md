@@ -171,8 +171,8 @@ Models are grouped by origin and how they are billed:
 | `official-paid` | First-party models with `paid_only: true`. |
 | `official-quest` | First-party models metered in pollen, open to everyone. |
 | `community-paid` | Community models with `paid_only: true`. |
-| `community-quest` | Community models metered in pollen, including those that publish no price. |
-| `community-free` | Community models publishing an explicit 0 in / 0 out. |
+| `community-quest` | Community models metered in pollen. A community model that publishes no price is free instead, unless it is itself an agent (`agent: true`). |
+| `community-free` | Community models publishing an explicit 0 in / 0 out, or no price at all (except agent models). |
 
 There is no `official-free` group. First-party models are sold, so an official
 model whose price is absent is metered rather than free: a missing price means
