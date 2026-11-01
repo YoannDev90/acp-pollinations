@@ -4,8 +4,6 @@
 
 All code, comments, documentation, commit messages, and log output **MUST** be
 written in English. User-facing strings and error messages are English too.
-French (or any other language) is only acceptable in private notes outside the
-repository.
 
 ## Project
 
