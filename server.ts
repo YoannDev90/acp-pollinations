@@ -470,7 +470,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     previousCwd: string,
   ): LlmMessage[] {
     const hasSystem = history[0]?.role === "system";
-    if (hasSystem && previousCwd === cwd) return history;
+    if (hasSystem && resolve(previousCwd) === resolve(cwd)) return history;
     return [systemMessage(cwd), ...(hasSystem ? history.slice(1) : history)];
   }
 

@@ -1,5 +1,6 @@
 import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { realpathSync } from "node:fs";
+import { join, resolve } from "node:path";
 
 import type { LlmMessage, LlmRole, LlmToolCall } from "./llm.js";
 
@@ -184,9 +185,20 @@ export function createSessionStore(dir?: string): SessionStore {
   };
 }
 
+/** Canonicalises a path so filtering does not depend on spelling. */
+function canonicalPath(value: string): string {
+  try {
+    return realpathSync(resolve(value));
+  } catch {
+    return resolve(value);
+  }
+}
+
 /** Whether a session belongs to the workspace the client asked about. */
 function belongsTo(record: PersistedSession, cwd: string): boolean {
-  return record.cwd === cwd || record.roots.includes(cwd);
+  const target = canonicalPath(cwd);
+  if (canonicalPath(record.cwd) === target) return true;
+  return record.roots.some((root) => canonicalPath(root) === target);
 }
 
 /** Cursors are plain offsets; anything unparseable starts at the first page. */
