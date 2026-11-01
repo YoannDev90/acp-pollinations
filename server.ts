@@ -720,6 +720,40 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
         return { stopReason: "end_turn" };
       }
 
+      if (promptText === "/reasoning" || promptText.startsWith("/reasoning ")) {
+        await replayUserPrompt(ctx.params.prompt, notify, session);
+        const parts = promptText.split(/\s+/);
+        const requested = parts[1];
+        if (!requested) {
+          const text = `Current reasoning level: ${session.reasoningLevel}`;
+          const messageId = nextMessageId(session);
+          await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
+          session.history.push({ role: "assistant", content: text });
+          await persist(session);
+          return { stopReason: "end_turn" };
+        }
+        if (!REASONING_LEVELS.some((l) => l.value === requested)) {
+          const text = `Unknown reasoning level "${requested}". Available: ${REASONING_LEVELS.map((l) => l.value).join(", ")}.`;
+          const messageId = nextMessageId(session);
+          await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
+          session.history.push({ role: "assistant", content: text });
+          await persist(session);
+          return { stopReason: "end_turn" };
+        }
+        session.reasoningLevel = requested;
+        await persist(session);
+        const models = await modelCatalog();
+        const configOptions = [buildModelOption(models, session.model), buildReasoningOption(requested)];
+        const notifyConfig = createNotifier(ctx.client, session.id);
+        await notifyConfig({ sessionUpdate: "config_option_update", configOptions });
+        const text = `Switched reasoning level to ${session.reasoningLevel}.`;
+        const messageId = nextMessageId(session);
+        await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
+        session.history.push({ role: "assistant", content: text });
+        await persist(session);
+        return { stopReason: "end_turn" };
+      }
+
       if (promptText === "/help" || promptText.startsWith("/help ")) {
         await replayUserPrompt(ctx.params.prompt, notify, session);
         const helpText = "Available commands:\n- /help  Show this help message.";
