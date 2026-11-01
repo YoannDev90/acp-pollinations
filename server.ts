@@ -655,6 +655,39 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
         return { stopReason: "end_turn" };
       }
 
+      if (promptText === "/model" || promptText.startsWith("/model ")) {
+        await replayUserPrompt(ctx.params.prompt, notify, session);
+        const parts = promptText.split(/\s+/);
+        const requested = parts[1];
+        if (!requested) {
+          const text = `Current model: ${session.model}`;
+          const messageId = nextMessageId(session);
+          await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
+          session.history.push({ role: "assistant", content: text });
+          await persist(session);
+          return { stopReason: "end_turn" };
+        }
+
+        const models = await modelCatalog();
+        if (!isKnownModel(models, requested) && requested !== session.model) {
+          const text = `Unknown model "${requested}".`;
+          const messageId = nextMessageId(session);
+          await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
+          session.history.push({ role: "assistant", content: text });
+          await persist(session);
+          return { stopReason: "end_turn" };
+        }
+
+        session.model = requested;
+        await persist(session);
+        const text = `Switched model to ${session.model}.`;
+        const messageId = nextMessageId(session);
+        await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
+        session.history.push({ role: "assistant", content: text });
+        await persist(session);
+        return { stopReason: "end_turn" };
+      }
+
       if (promptText === "/help" || promptText.startsWith("/help ")) {
         await replayUserPrompt(ctx.params.prompt, notify, session);
         const helpText = "Available commands:\n- /help  Show this help message.";
