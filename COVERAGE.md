@@ -82,7 +82,7 @@ All built-in tools are confined to the session workspace root set (symlinks reso
 | Transport | Status | Notes |
 |---|---|---|
 | stdio | ✅ | tools exposed to the model |
-| HTTP | ❌ | `mcpCapabilities.http = false` |
+| HTTP | ✅ | `mcpCapabilities.http = true` |
 | SSE | ❌ | `mcpCapabilities.sse = false` |
 
 ## Other features
