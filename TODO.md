@@ -4,17 +4,17 @@ Missing features from `COVERAGE.md`, sorted by priority.
 
 ## P1 — High (user-facing / Zed UX)
 
-- [ ] **Session info update** (`session_info_update`): auto-generate and push a session title after the first meaningful exchange.
-- [ ] **Slash commands** (`available_commands_update`): advertise and handle `/` commands.
-- [ ] **Session notices** (`notice`): surface live warnings/info to the client.
-- [ ] **Config option updates** (`config_option_update`): notify clients when options change outside a `set_config_option` response.
+- [x] **Session info update** (`session_info_update`): auto-generate and push a session title after the first meaningful exchange.
+- [x] **Slash commands** (`available_commands_update`): advertise available commands.
+- [x] **Session notices** (`notice`): surface live warnings/info to the client.
+- [x] **Config option updates** (`config_option_update`): notify clients when options change.
 
 ## P2 — Medium (session lifecycle)
 
-- [ ] **`session/close`**: cancel work and free resources; advertise `sessionCapabilities.close`.
-- [ ] **`session/resume`**: reconnect without replaying history; advertise `sessionCapabilities.resume`.
+- [x] **`session/close`**: cancel work and free resources; advertise `sessionCapabilities.close`.
+- [x] **`session/resume`**: reconnect without replaying history; advertise `sessionCapabilities.resume`.
 - [ ] **Structured plan** (`plan` update): expose the agent's execution plan.
-- [ ] **Tool call names stabilization**: ensure `name` is always sent and stable (already partial).
+- [x] **Tool call names stabilization**: `name` is always sent on `tool_call`.
 
 ## P3 — Low (advanced / optional)
 
@@ -22,7 +22,6 @@ Missing features from `COVERAGE.md`, sorted by priority.
 - [ ] **MCP HTTP transport** (`mcpCapabilities.http`).
 - [ ] **MCP SSE transport** (`mcpCapabilities.sse`).
 - [ ] **Authentication methods** (`authMethods`, `auth/login`, `logout`): only if multi-user/remote use is needed.
-- [ ] **Session title from first prompt**: client-facing metadata beyond `session_info_update`.
 
 ## Notes
 
