@@ -798,9 +798,15 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     if (usage) {
       const models = await modelCatalog();
       const info = models.find((model) => model.id === session.model);
+      // Free models publish no price (or an explicit 0/0): their cost is 0.
+      // Only genuinely unstated prices on non-free models stay "unknown".
+      const promptPrice =
+        info?.promptPrice ?? (info?.group.endsWith("-free") ? 0 : null);
+      const completionPrice =
+        info?.completionPrice ?? (info?.group.endsWith("-free") ? 0 : null);
       const incrementalCost =
-        info && info.promptPrice !== null && info.completionPrice !== null
-          ? usage.promptTokens * info.promptPrice + usage.completionTokens * info.completionPrice
+        promptPrice !== null && completionPrice !== null
+          ? usage.promptTokens * promptPrice + usage.completionTokens * completionPrice
           : null;
       if (incrementalCost !== null) session.costSoFar += incrementalCost;
 
