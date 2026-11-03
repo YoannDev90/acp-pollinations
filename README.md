@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="banner.svg" alt="acp-pollinations" width="100%">
+</p>
+
 # acp-pollinations
 
 > A coding agent for your editor, powered by [Pollinations](https://pollinations.ai).
