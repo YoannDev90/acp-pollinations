@@ -59,6 +59,20 @@ export type ResolveConfigOptions = {
  * Returns an empty string when neither source yields a key, so callers can
  * decide how to report the problem.
  */
+async function readConfigFile(home: string): Promise<Record<string, unknown>> {
+  for (const name of ["config-acp", "config-acp.json", "config.json"]) {
+    try {
+      const parsed: unknown = JSON.parse(await readFile(join(home, name), "utf8"));
+      if (typeof parsed === "object" && parsed !== null) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return {};
+}
+
 export async function resolveApiKey(
   options: ResolveConfigOptions = {},
 ): Promise<string> {
@@ -69,6 +83,12 @@ export async function resolveApiKey(
 
   const home =
     env.POLLINATIONS_HOME?.trim() || join(homedir(), ".pollinations");
+
+  // Config file (editable) takes precedence over the credentials file.
+  const configFile = await readConfigFile(home);
+  const fromConfig = configFile.apiKey ?? configFile.pollinations_api_key;
+  if (typeof fromConfig === "string" && fromConfig.trim()) return fromConfig.trim();
+
   const credentialsFile =
     options.credentialsFile ?? join(home, "credentials.json");
 
@@ -89,24 +109,43 @@ export async function resolveApiKey(
 export function resolveEnvConfig(
   env: NodeJS.ProcessEnv,
   apiKey: string,
+  configFile: Record<string, unknown> = {},
 ): AgentConfig {
-  const permissionMode =
-    env.ACP_PERMISSION_MODE?.trim() === "allow" ? "allow" : "ask";
-  const maxTurnRequests = Number.parseInt(env.ACP_MAX_TURN_REQUESTS ?? "", 10);
+  const permissionMode = (
+    env.ACP_PERMISSION_MODE?.trim() ||
+    (typeof configFile.permission_mode === "string" ? configFile.permission_mode.trim() : "") ||
+    (typeof configFile.permissionMode === "string" ? configFile.permissionMode.trim() : "")
+  ) === "allow"
+    ? "allow"
+    : "ask";
+
+  const maxTurnRequests = Number.parseInt(
+    env.ACP_MAX_TURN_REQUESTS ?? String(configFile.max_turn_requests ?? configFile.maxTurnRequests ?? ""),
+    10,
+  );
   const compactionTokens = Number.parseInt(
-    env.ACP_COMPACTION_THRESHOLD_TOKENS ?? "",
+    env.ACP_COMPACTION_THRESHOLD_TOKENS ??
+      String(configFile.compaction_threshold_tokens ?? configFile.compactionThresholdTokens ?? ""),
     10,
   );
   const home =
     env.POLLINATIONS_HOME?.trim() || join(homedir(), ".pollinations");
 
+  const baseUrl =
+    env.POLLINATIONS_BASE_URL?.trim() ||
+    (typeof configFile.base_url === "string" ? configFile.base_url.trim() : "") ||
+    (typeof configFile.baseUrl === "string" ? configFile.baseUrl.trim() : "") ||
+    DEFAULT_BASE_URL;
+
+  const model =
+    env.POLLINATIONS_MODEL?.trim() ||
+    (typeof configFile.model === "string" ? configFile.model.trim() : "") ||
+    DEFAULT_MODEL;
+
   return {
     apiKey,
-    baseUrl: (env.POLLINATIONS_BASE_URL?.trim() || DEFAULT_BASE_URL).replace(
-      /\/+$/,
-      "",
-    ),
-    model: env.POLLINATIONS_MODEL?.trim() || DEFAULT_MODEL,
+    baseUrl: baseUrl.replace(/\/+$/, ""),
+    model,
     maxTurnRequests:
       Number.isFinite(maxTurnRequests) && maxTurnRequests > 0
         ? maxTurnRequests
@@ -126,8 +165,10 @@ export async function resolveConfig(
   options: ResolveConfigOptions = {},
 ): Promise<AgentConfig> {
   const env = options.env ?? process.env;
+  const home = env.POLLINATIONS_HOME?.trim() || join(homedir(), ".pollinations");
+  const configFile = await readConfigFile(home);
   const apiKey = await resolveApiKey(options);
-  const config = resolveEnvConfig(env, apiKey);
+  const config = resolveEnvConfig(env, apiKey, configFile);
 
   process.stderr.write(
     `Pollinations: config baseUrl=${config.baseUrl} model=${config.model} ` +
