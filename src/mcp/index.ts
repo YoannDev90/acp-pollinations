@@ -18,6 +18,25 @@ const MCP_REQUEST_TIMEOUT_MS = 30_000;
 /** Ceiling on the HTTP/SSE handshake itself, before any request is sent. */
 const MCP_CONNECT_TIMEOUT_MS = 10_000;
 
+/**
+ * Deadlines for one MCP connection, overridable per call.
+ *
+ * Tests shrink them so a server that deliberately never answers fails the
+ * assertion in milliseconds instead of holding the suite for the production
+ * ceiling.
+ */
+export type McpTimeouts = {
+  /** Milliseconds allowed for the HTTP/SSE handshake. */
+  connectMs: number;
+  /** Milliseconds allowed for a single JSON-RPC exchange. */
+  requestMs: number;
+};
+
+const DEFAULT_MCP_TIMEOUTS: McpTimeouts = {
+  connectMs: MCP_CONNECT_TIMEOUT_MS,
+  requestMs: MCP_REQUEST_TIMEOUT_MS,
+};
+
 export type McpEnvVar = { name: string; value: string };
 
 export type McpServerConfig = {
@@ -243,7 +262,10 @@ function headersToRecord(headers: McpServerConfig["headers"]): Record<string, st
   return { ...headers };
 }
 
-export async function connectHttpMcpServer(config: McpServerConfig): Promise<McpConnection> {
+export async function connectHttpMcpServer(
+  config: McpServerConfig,
+  timeouts: McpTimeouts = DEFAULT_MCP_TIMEOUTS,
+): Promise<McpConnection> {
   const serverName = config.name?.trim() || config.url || "mcp-http";
   const url = config.url as string;
   const baseHeaders = headersToRecord(config.headers);
@@ -264,7 +286,7 @@ export async function connectHttpMcpServer(config: McpServerConfig): Promise<Mcp
       method: "POST",
       headers,
       body: JSON.stringify({ jsonrpc: "2.0", id, method, params: params ?? {} }),
-      signal: AbortSignal.timeout(MCP_REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeouts.requestMs),
     });
 
     const sid = response.headers.get("mcp-session-id");
@@ -317,7 +339,7 @@ export async function connectHttpMcpServer(config: McpServerConfig): Promise<Mcp
         method: "POST",
         headers: { "Content-Type": "application/json", ...baseHeaders, ...(sessionId ? { "Mcp-Session-Id": sessionId } : {}) },
         body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }),
-        signal: AbortSignal.timeout(MCP_CONNECT_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeouts.connectMs),
       });
     } catch {
       // ignore
@@ -350,13 +372,16 @@ export async function connectHttpMcpServer(config: McpServerConfig): Promise<Mcp
   return { name: serverName as string, tools, bindings, toolDefinitions, close };
 }
 
-export async function connectSseMcpServer(config: McpServerConfig): Promise<McpConnection> {
+export async function connectSseMcpServer(
+  config: McpServerConfig,
+  timeouts: McpTimeouts = DEFAULT_MCP_TIMEOUTS,
+): Promise<McpConnection> {
   const serverName = config.name?.trim() || config.url || "mcp-sse";
   const url = config.url as string;
   const baseHeaders = headersToRecord(config.headers);
 
   const controller = new AbortController();
-  const connectTimer = setTimeout(() => controller.abort(), MCP_CONNECT_TIMEOUT_MS);
+  const connectTimer = setTimeout(() => controller.abort(), timeouts.connectMs);
   const response = await fetch(url, {
     method: "GET",
     headers: { Accept: "text/event-stream", ...baseHeaders },
@@ -466,7 +491,7 @@ export async function connectSseMcpServer(config: McpServerConfig): Promise<McpC
     settleEndpoint(() =>
       endpoint.failed(new Error("MCP SSE server did not send an endpoint event")),
     );
-  }, MCP_CONNECT_TIMEOUT_MS);
+  }, timeouts.connectMs);
 
   let target: string;
   try {
@@ -494,7 +519,7 @@ export async function connectSseMcpServer(config: McpServerConfig): Promise<McpC
     const timer = setTimeout(() => {
       pending.delete(id);
       slot.reject(new Error(`MCP request "${method}" timed out`));
-    }, MCP_REQUEST_TIMEOUT_MS);
+    }, timeouts.requestMs);
     pending.set(id, {
       resolve: (value) => {
         clearTimeout(timer);
@@ -511,7 +536,7 @@ export async function connectSseMcpServer(config: McpServerConfig): Promise<McpC
         method: "POST",
         headers: { "Content-Type": "application/json", ...baseHeaders },
         body: JSON.stringify({ jsonrpc: "2.0", id, method, params: params ?? {} }),
-        signal: AbortSignal.timeout(MCP_REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeouts.requestMs),
       });
       if (!response.ok) throw new Error(`MCP request "${method}" failed (${response.status})`);
     } catch (error) {
