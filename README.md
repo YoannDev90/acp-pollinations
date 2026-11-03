@@ -87,7 +87,7 @@ All configuration is via environment variables:
 | `POLLINATIONS_MODEL` | `z-ai/glm-5.3-flash` | Model a session starts on. |
 | `POLLINATIONS_HOME` | `~/.pollinations` | Home for credentials, sessions, and logs. |
 | `ACP_MAX_TURN_REQUESTS` | `24` | Ceiling on model requests per prompt turn. |
-| `ACP_COMPACTION_THRESHOLD_TOKENS` | `50000` | Prompt tokens at/above which a transcript is summarised; `0` disables. |
+| `ACP_COMPACTION_THRESHOLD_TOKENS` | `0` (auto) | Prompt tokens at/above which a transcript is summarised. `0` = 85% of the model's context window; negative disables. |
 | `ACP_PERMISSION_MODE` | `ask` | `ask` prompts before mutating; `allow` skips (CI/demos). |
 
 ## Model picker

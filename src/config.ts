@@ -16,7 +16,7 @@ export const DEFAULT_MAX_TURN_REQUESTS = 24;
  * replaced. Chosen well under typical context windows, so a long session keeps
  * working instead of quietly paying for its whole history on every turn.
  */
-export const DEFAULT_COMPACTION_THRESHOLD_TOKENS = 50_000;
+export const DEFAULT_COMPACTION_THRESHOLD_TOKENS = 0;
 
 /** Resolved runtime configuration for the agent. */
 export type AgentConfig = {
@@ -114,7 +114,7 @@ export function resolveEnvConfig(
     sessionsDir: join(home, "sessions"),
     // A negative value is read as "off", which is what a CI run may want.
     compactionThresholdTokens:
-      Number.isFinite(compactionTokens) && compactionTokens >= 0
+      Number.isFinite(compactionTokens) && compactionTokens >= -1
         ? compactionTokens
         : DEFAULT_COMPACTION_THRESHOLD_TOKENS,
     permissionMode: permissionMode as "ask" | "allow",

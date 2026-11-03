@@ -980,15 +980,17 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     signal: AbortSignal,
     capabilities: ClientCapabilities | null,
   ): Promise<void> {
-    if (
-      !shouldCompact({
-        threshold: config.compactionThresholdTokens,
-        lastPromptTokens: session.lastPromptTokens,
-        historyLength: session.history.length,
-      })
-    ) {
-      return;
+    let threshold = config.compactionThresholdTokens;
+    if (threshold === 0) {
+      // Auto: use 85% of the model's context window.
+      const models = await modelCatalog();
+      const info = models.find((model) => model.id === session.model);
+      const contextWindow = info?.contextLength ?? 128_000;
+      threshold = Math.floor(contextWindow * 0.85);
     }
+    if (threshold < 0) return; // disabled
+    if (session.lastPromptTokens < threshold) return;
+    if (session.history.length < 3) return;
 
     process.stderr.write(
       `${AGENT_TITLE}: compacting session=${session.id} lastPromptTokens=${session.lastPromptTokens} ` +
