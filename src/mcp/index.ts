@@ -7,6 +7,17 @@ import type { ToolExecutionResult, ToolContext } from "../tools/index.js";
 
 const MAX_MCP_OUTPUT_CHARS = 20_000;
 
+/**
+ * Ceiling on a single JSON-RPC exchange with an MCP server.
+ *
+ * The stdio transport already had one; HTTP and SSE did not, so a server that
+ * accepted a request and never answered held `session/new` open forever.
+ */
+const MCP_REQUEST_TIMEOUT_MS = 30_000;
+
+/** Ceiling on the HTTP/SSE handshake itself, before any request is sent. */
+const MCP_CONNECT_TIMEOUT_MS = 10_000;
+
 export type McpEnvVar = { name: string; value: string };
 
 export type McpServerConfig = {
@@ -79,6 +90,27 @@ export async function connectMcpServer(config: McpServerConfig): Promise<McpConn
   const rl = createInterface({ input: child.stdout });
   let nextId = 1;
   const pending = new Map<number, PendingRequest>();
+
+  /**
+   * Settles every in-flight request in favour of `error`.
+   *
+   * A spawn failure (`ENOENT`, EACCES) surfaces as an `error` event on the
+   * child, not as a throw from `spawn`, so without a listener it becomes an
+   * uncaught exception that kills the agent — one typo in the client's
+   * `mcpServers` entry would take every session down with it.
+   */
+  const failPending = (error: Error) => {
+    for (const request of pending.values()) {
+      clearTimeout(request.timer);
+      request.reject(error);
+    }
+    pending.clear();
+  };
+  child.on("error", failPending);
+  // The pipes break when a server dies mid-reply. That is the same outcome as
+  // it exiting, and an unhandled stream error would be a crash instead.
+  child.stdin?.on("error", () => undefined);
+  child.stdout?.on("error", () => undefined);
 
   rl.on("line", (line) => {
     if (!line.trim()) return;
@@ -172,7 +204,11 @@ export async function connectMcpServer(config: McpServerConfig): Promise<McpConn
     );
   }
 
-  process.stderr.write(`${serverName}: connected with ${tools.length} tool(s)\n`);
+  process.stderr.write(
+    tools.length > 0
+      ? `${serverName}: connected with ${tools.length} tool(s)\n`
+      : `${serverName}: no tools available\n`,
+  );
 
   const close = () => {
     try {
@@ -214,7 +250,6 @@ export async function connectHttpMcpServer(config: McpServerConfig): Promise<Mcp
 
   let sessionId: string | undefined;
   let nextId = 1;
-  const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
 
   async function send(method: string, params: Record<string, unknown> | null): Promise<unknown> {
     const id = nextId++;
@@ -229,6 +264,7 @@ export async function connectHttpMcpServer(config: McpServerConfig): Promise<Mcp
       method: "POST",
       headers,
       body: JSON.stringify({ jsonrpc: "2.0", id, method, params: params ?? {} }),
+      signal: AbortSignal.timeout(MCP_REQUEST_TIMEOUT_MS),
     });
 
     const sid = response.headers.get("mcp-session-id");
@@ -281,6 +317,7 @@ export async function connectHttpMcpServer(config: McpServerConfig): Promise<Mcp
         method: "POST",
         headers: { "Content-Type": "application/json", ...baseHeaders, ...(sessionId ? { "Mcp-Session-Id": sessionId } : {}) },
         body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }),
+        signal: AbortSignal.timeout(MCP_CONNECT_TIMEOUT_MS),
       });
     } catch {
       // ignore
@@ -302,7 +339,7 @@ export async function connectHttpMcpServer(config: McpServerConfig): Promise<Mcp
     toolDefinitions.push(...built.toolDefinitions);
   } catch (error) {
     process.stderr.write(
-      `${serverName}: MCP HTTP connection failed (${error instanceof Error ? error.message : String(error)})\\n`,
+      `${serverName}: MCP HTTP connection failed (${error instanceof Error ? error.message : String(error)})\n`,
     );
   }
 
@@ -319,11 +356,12 @@ export async function connectSseMcpServer(config: McpServerConfig): Promise<McpC
   const baseHeaders = headersToRecord(config.headers);
 
   const controller = new AbortController();
+  const connectTimer = setTimeout(() => controller.abort(), MCP_CONNECT_TIMEOUT_MS);
   const response = await fetch(url, {
     method: "GET",
     headers: { Accept: "text/event-stream", ...baseHeaders },
     signal: controller.signal,
-  });
+  }).finally(() => clearTimeout(connectTimer));
 
   if (!response.ok || !response.body) {
     throw new Error(`MCP SSE connection failed (${response.status})`);
@@ -332,13 +370,42 @@ export async function connectSseMcpServer(config: McpServerConfig): Promise<McpC
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  let postUrl: string | null = null;
-  let endpointReady: (() => void) | null = null;
-  const endpointPromise = new Promise<void>((resolve) => {
-    endpointReady = resolve;
-  });
 
   const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
+
+  /**
+   * Settles the endpoint handshake.
+   *
+   * Held in an object rather than in `let` bindings because the executor of
+   * the promise runs synchronously but TypeScript cannot see that, and
+   * because every exit path — timeout, stream end, transport error — has to
+   * settle it exactly once. Before, only the happy path did, so an SSE server
+   * that never sent `endpoint` left `session/new` waiting forever.
+   */
+  const endpoint: {
+    settled: boolean;
+    ready: (target: string) => void;
+    failed: (error: Error) => void;
+  } = {
+    settled: false,
+    ready: () => undefined,
+    failed: () => undefined,
+  };
+  const endpointPromise = new Promise<string>((resolve, reject) => {
+    endpoint.ready = resolve;
+    endpoint.failed = reject;
+  });
+
+  const settleEndpoint = (action: () => void) => {
+    if (endpoint.settled) return;
+    endpoint.settled = true;
+    action();
+  };
+
+  const failPending = (error: Error) => {
+    for (const request of pending.values()) request.reject(error);
+    pending.clear();
+  };
 
   const pump = (async () => {
     try {
@@ -347,25 +414,23 @@ export async function connectSseMcpServer(config: McpServerConfig): Promise<McpC
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         let idx: number;
-        while ((idx = buffer.indexOf("\\n\\n")) !== -1) {
+        // Frames are delimited by a blank line; the literals below are real
+        // newlines, not the two-character sequence.
+        while ((idx = buffer.indexOf("\n\n")) !== -1) {
           const frame = buffer.slice(0, idx);
           buffer = buffer.slice(idx + 2);
 
           let event = "message";
           const dataLines: string[] = [];
-          for (const line of frame.split(/\\r?\\n/)) {
+          for (const line of frame.split(/\r?\n/)) {
             if (line.startsWith("event:")) event = line.slice(6).trim();
             else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
           }
-          const data = dataLines.join("\\n");
+          const data = dataLines.join("\n");
 
           if (event === "endpoint" && data) {
-            postUrl = new URL(data, url).toString();
-            if (endpointReady) {
-              const ready = endpointReady as () => void;
-              endpointReady = null;
-              ready();
-            }
+            const endpointUrl = new URL(data, url).toString();
+            settleEndpoint(() => endpoint.ready(endpointUrl));
             continue;
           }
 
@@ -384,58 +449,78 @@ export async function connectSseMcpServer(config: McpServerConfig): Promise<McpC
         }
       }
     } catch (error) {
-      for (const request of pending.values()) {
-        request.reject(error instanceof Error ? error : new Error(String(error)));
-      }
-      pending.clear();
+      failPending(error instanceof Error ? error : new Error(String(error)));
     }
+
+    // Whatever ended the stream, no reply can arrive on it any more. The map
+    // is already empty on the error path, so this is a no-op there.
+    failPending(new Error("MCP SSE stream closed"));
+    // The stream is over: either it ended before the endpoint arrived or the
+    // server hung up on us, and neither leaves a usable connection behind.
+    settleEndpoint(() =>
+      endpoint.failed(new Error("MCP SSE stream ended before the endpoint event")),
+    );
   })();
 
-  // Wait for the endpoint event (with a timeout).
   const endpointTimeout = setTimeout(() => {
-    if (endpointReady) {
-      endpointReady = null;
-      // reject all pending? none yet
-    }
-  }, 10_000);
-  await endpointPromise;
-  clearTimeout(endpointTimeout);
+    settleEndpoint(() =>
+      endpoint.failed(new Error("MCP SSE server did not send an endpoint event")),
+    );
+  }, MCP_CONNECT_TIMEOUT_MS);
 
-  if (!postUrl) throw new Error("MCP SSE server did not send an endpoint");
+  let target: string;
+  try {
+    target = await endpointPromise;
+  } finally {
+    clearTimeout(endpointTimeout);
+  }
 
   let nextId = 1;
 
   async function send(method: string, params: Record<string, unknown> | null): Promise<unknown> {
     const id = nextId++;
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      ...baseHeaders,
+
+    // Registered before the POST leaves: the server pushes replies on the GET
+    // stream, so one that answers as soon as it has the request could reply
+    // before a registration made after `await fetch(...)` landed.
+    const slot: { resolve: (value: unknown) => void; reject: (error: Error) => void } = {
+      resolve: () => undefined,
+      reject: () => undefined,
     };
-    const response = await fetch(postUrl as string, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ jsonrpc: "2.0", id, method, params: params ?? {} }),
+    const reply = new Promise<unknown>((resolve, reject) => {
+      slot.resolve = resolve;
+      slot.reject = reject;
     });
-    if (!response.ok) {
-      throw new Error(`MCP request "${method}" failed (${response.status})`);
+    const timer = setTimeout(() => {
+      pending.delete(id);
+      slot.reject(new Error(`MCP request "${method}" timed out`));
+    }, MCP_REQUEST_TIMEOUT_MS);
+    pending.set(id, {
+      resolve: (value) => {
+        clearTimeout(timer);
+        slot.resolve(value);
+      },
+      reject: (error) => {
+        clearTimeout(timer);
+        slot.reject(error);
+      },
+    });
+
+    try {
+      const response = await fetch(target, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...baseHeaders },
+        body: JSON.stringify({ jsonrpc: "2.0", id, method, params: params ?? {} }),
+        signal: AbortSignal.timeout(MCP_REQUEST_TIMEOUT_MS),
+      });
+      if (!response.ok) throw new Error(`MCP request "${method}" failed (${response.status})`);
+    } catch (error) {
+      clearTimeout(timer);
+      pending.delete(id);
+      slot.reject(error instanceof Error ? error : new Error(String(error)));
     }
 
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        pending.delete(id);
-        reject(new Error(`MCP request "${method}" timed out`));
-      }, 30_000);
-      pending.set(id, {
-        resolve: (value) => {
-          clearTimeout(timer);
-          resolve(value);
-        },
-        reject: (error) => {
-          clearTimeout(timer);
-          reject(error);
-        },
-      });
-    });
+    return reply;
   }
 
   const tools: McpTool[] = [];
@@ -465,7 +550,7 @@ export async function connectSseMcpServer(config: McpServerConfig): Promise<McpC
     toolDefinitions.push(...built.toolDefinitions);
   } catch (error) {
     process.stderr.write(
-      `${serverName}: MCP SSE connection failed (${error instanceof Error ? error.message : String(error)})\\n`,
+      `${serverName}: MCP SSE connection failed (${error instanceof Error ? error.message : String(error)})\n`,
     );
   }
 
@@ -522,7 +607,7 @@ function buildMcpBindings(
           if (Array.isArray(result?.content)) {
             text = (result.content as Array<{ type?: string; text?: string }>)
               .map((entry) => (entry?.type === "text" ? String(entry.text ?? "") : JSON.stringify(entry)))
-              .join("\\n");
+              .join("\n");
           } else if (result && typeof result === "object") {
             text = JSON.stringify(result);
           } else if (typeof result === "string") {
@@ -532,7 +617,7 @@ function buildMcpBindings(
           const clipped =
             output.length <= MAX_MCP_OUTPUT_CHARS
               ? output
-              : `${output.slice(0, MAX_MCP_OUTPUT_CHARS)}\\n… output truncated (${output.length} characters total)`;
+              : `${output.slice(0, MAX_MCP_OUTPUT_CHARS)}\n… output truncated (${output.length} characters total)`;
           return { output: clipped, isError: result?.isError === true };
         } catch (error) {
           return { output: error instanceof Error ? error.message : String(error), isError: true };
