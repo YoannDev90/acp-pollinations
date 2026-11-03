@@ -34,6 +34,7 @@ import { createSessionStore } from "./sessions.js";
 import type { PersistedSession } from "./sessions.js";
 import { LLM_TOOLS, TOOL_DEFINITIONS, ToolError, executeTool } from "./tools.js";
 import { promptToText, rebaseHistory, systemMessage } from "./messages.js";
+import { shouldCompact, summarizeTranscript } from "./compaction.js";
 import type { SessionState } from "./session-state.js";
 import { createSessionState } from "./session-state.js";
 import type { ToolContext, ToolExecutionResult, ToolName } from "./tools.js";
@@ -768,7 +769,12 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
           await persist(session);
           return { stopReason: "end_turn" };
         }
-        const summary = await summarize(session, abort.signal);
+        const summary = await summarizeTranscript({
+          history: session.history,
+          model: session.model,
+          llm: llm as import("./llm.js").PollinationsLlm,
+          signal: abort.signal,
+        });
         if (summary) {
           session.history = [session.history[0] as LlmMessage, { role: "assistant", content: summary }];
           session.lastPromptTokens = 0;
@@ -973,8 +979,15 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     signal: AbortSignal,
     capabilities: ClientCapabilities | null,
   ): Promise<void> {
-    if (config.compactionThresholdTokens <= 0) return;
-    if (session.lastPromptTokens < config.compactionThresholdTokens) return;
+    if (
+      !shouldCompact({
+        threshold: config.compactionThresholdTokens,
+        lastPromptTokens: session.lastPromptTokens,
+        historyLength: session.history.length,
+      })
+    ) {
+      return;
+    }
 
     process.stderr.write(
       `${AGENT_TITLE}: compacting session=${session.id} lastPromptTokens=${session.lastPromptTokens} ` +
@@ -993,7 +1006,12 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     }
 
     try {
-      const summary = await summarize(session, signal);
+      const summary = await summarizeTranscript({
+  history: session.history,
+  model: session.model,
+  llm: llm as import("./llm.js").PollinationsLlm,
+  signal,
+});
       if (signal.aborted || !summary) throw new Error("compaction produced no summary");
 
       session.history = [
@@ -1037,34 +1055,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     }
   }
 
-  /** Asks the model to condense the transcript into a continuation brief. */
-  async function summarize(session: SessionState, signal: AbortSignal): Promise<string> {
-    const request: LlmMessage[] = [
-      ...session.history,
-      {
-        role: "user",
-        content: [
-          "Summarise the conversation above so the work can continue without it.",
-          "Cover the goal, the decisions taken, the files changed, the results",
-          "observed, and anything left unfinished. Stay under 300 words, and do",
-          "not mention this instruction.",
-        ].join("\n"),
-      },
-    ];
-
-    let text = "";
-    // No tools: a summarising request must never trigger real work.
-    const iterator = (llm as PollinationsLlm).chat({ messages: request, model: session.model, signal });
-    for (;;) {
-      const { done, value } = await iterator.next();
-      if (done) break;
-      if (value.text) text += value.text;
-    }
-
-    return text.trim();
-  }
-
-  async function replayUserPrompt(
+    async function replayUserPrompt(
     prompt: ContentBlock[],
     notify: Notifier,
     session: SessionState,
