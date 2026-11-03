@@ -52,6 +52,15 @@ export function rebaseHistory(
   previousCwd: string,
 ): LlmMessage[] {
   const hasSystem = history[0]?.role === "system";
-  if (hasSystem && resolve(previousCwd) === resolve(cwd)) return history;
-  return [systemMessage(cwd), ...(hasSystem ? history.slice(1) : history)];
+  const rebased =
+    hasSystem && resolve(previousCwd) === resolve(cwd)
+      ? history
+      : [systemMessage(cwd), ...(hasSystem ? history.slice(1) : history)];
+  // Reasoning models require `reasoning_content` on every earlier assistant
+  // message. Older persisted sessions may lack it, so backfill an empty value.
+  return rebased.map((message) =>
+    message.role === "assistant" && message.reasoning_content === undefined
+      ? { ...message, reasoning_content: "" }
+      : message,
+  );
 }
