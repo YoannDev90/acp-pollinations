@@ -78,7 +78,11 @@ fails with `-32000` until a key is configured.
 
 ## Configuration
 
-All configuration is via environment variables:
+All configuration is via environment variables, optionally overridden by an
+editable file `$POLLINATIONS_HOME/config-acp` (JSON, keys: `model`,
+`base_url`, `permission_mode`, `max_turn_requests`,
+`compaction_threshold_tokens`, `api_key`). Environment variables take
+precedence.
 
 | Variable | Default | Purpose |
 |---|---|---|
