@@ -6,8 +6,8 @@ import { afterAll, describe, expect, it } from "vitest";
 import {
   MAX_PERSISTED_SESSIONS,
   createSessionStore,
-} from "../src/sessions.js";
-import type { PersistedSession } from "../src/sessions.js";
+} from "../src/sessions/index.js";
+import type { PersistedSession } from "../src/sessions/index.js";
 import { createTmpDir } from "./helpers/tmp.js";
 
 const cleanups: Array<() => Promise<void>> = [];

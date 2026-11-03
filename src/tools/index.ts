@@ -6,7 +6,7 @@ import type { AgentContext, ClientCapabilities, ToolKind } from "@agentclientpro
 import { methods } from "@agentclientprotocol/sdk";
 
 import type { LlmToolDefinition } from "../llm.js";
-import type { McpToolBinding } from "../mcp.js";
+import type { McpToolBinding } from "../mcp/index.js";
 import { ToolError } from "../errors.js";
 import { resolveInRoots } from "../paths.js";
 

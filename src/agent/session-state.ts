@@ -1,6 +1,6 @@
-import type { LlmMessage } from "./llm.js";
-import type { McpConnection, McpToolBinding } from "./mcp.js";
-import type { ToolName } from "./tools/index.js";
+import type { LlmMessage } from "../llm.js";
+import type { McpConnection, McpToolBinding } from "../mcp/index.js";
+import type { ToolName } from "../tools/index.js";
 
 export type SessionState = {
   id: string;
@@ -19,7 +19,7 @@ export type SessionState = {
   costSoFar: number;
   mcpConnections: McpConnection[];
   mcpTools: Map<string, McpToolBinding>;
-  mcpToolDefinitions: import("./llm.js").LlmToolDefinition[];
+  mcpToolDefinitions: import("../llm.js").LlmToolDefinition[];
 };
 
 export function createSessionState(params: {

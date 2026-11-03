@@ -2,7 +2,7 @@ import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from "node:
 import { realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-import type { LlmMessage, LlmRole, LlmToolCall } from "./llm.js";
+import type { LlmMessage, LlmRole, LlmToolCall } from "../llm.js";
 
 /**
  * On-disk schema version, bumped whenever the record shape changes.

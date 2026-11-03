@@ -10,7 +10,7 @@ import { dirname, join } from "node:path";
 
 import { resolveConfig } from "../src/config.js";
 import { installFileLogger } from "../src/logger.js";
-import { AGENT_TITLE, AGENT_VERSION, createPollinationsAgent } from "../src/server.js";
+import { AGENT_TITLE, AGENT_VERSION, createPollinationsAgent } from "../src/agent/server.js";
 
 const config = await resolveConfig();
 

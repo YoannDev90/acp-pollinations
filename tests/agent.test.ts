@@ -7,7 +7,7 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import type { AgentConfig } from "../src/config.js";
 import { PollinationsLlm } from "../src/llm.js";
-import { createPollinationsAgent, promptToText } from "../src/server.js";
+import { createPollinationsAgent, promptToText } from "../src/agent/server.js";
 import { withInProcessClient } from "./helpers/acp-client.js";
 import type { Harness } from "./helpers/acp-client.js";
 import { startFakeLlmServer } from "./helpers/fake-llm-server.js";

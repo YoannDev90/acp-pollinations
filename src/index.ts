@@ -10,8 +10,8 @@ export {
   AGENT_VERSION,
   createPollinationsAgent,
   promptToText,
-} from "./server.js";
-export type { CreatePollinationsAgentOptions } from "./server.js";
+} from "./agent/server.js";
+export type { CreatePollinationsAgentOptions } from "./agent/server.js";
 
 export {
   DEFAULT_BASE_URL,
@@ -61,8 +61,8 @@ export {
   isStdioMcpServer,
   mergeMcpBindings,
   normalizeMcpServer,
-} from "./mcp.js";
-export type { McpConnection, McpServerConfig, McpTool, McpToolBinding } from "./mcp.js";
+} from "./mcp/index.js";
+export type { McpConnection, McpServerConfig, McpTool, McpToolBinding } from "./mcp/index.js";
 export type {
   ToolContext,
   ToolDefinition,
@@ -76,14 +76,14 @@ export {
   MAX_PERSISTED_SESSIONS,
   SESSION_RECORD_VERSION,
   createSessionStore,
-} from "./sessions.js";
+} from "./sessions/index.js";
 export type {
   ListSessionsOptions,
   ListSessionsResult,
   PersistedSession,
   SessionStore,
   StoredSession,
-} from "./sessions.js";
+} from "./sessions/index.js";
 
 // Re-exported for consumers that build ACP messages against the same schema.
 export { PROTOCOL_VERSION, methods } from "@agentclientprotocol/sdk";

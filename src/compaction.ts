@@ -1,5 +1,5 @@
 import type { LlmMessage } from "./llm.js";
-import type { SessionState } from "./session-state.js";
+import type { SessionState } from "./agent/session-state.js";
 
 /** Asks the model to condense the transcript into a continuation brief. */
 export async function summarizeTranscript(params: {

@@ -18,9 +18,9 @@ import type {
   ToolKind,
 } from "@agentclientprotocol/sdk";
 
-import type { AgentConfig } from "./config.js";
-import { LlmError, PollinationsLlm } from "./llm.js";
-import type { LlmMessage, LlmToolCall, LlmUsage } from "./llm.js";
+import type { AgentConfig } from "../config.js";
+import { LlmError, PollinationsLlm } from "../llm.js";
+import type { LlmMessage, LlmToolCall, LlmUsage } from "../llm.js";
 import {
   FALLBACK_MODELS,
   MODEL_CONFIG_ID,
@@ -28,29 +28,29 @@ import {
   buildModelOption,
   fetchModelCatalog,
   isKnownModel,
-} from "./models.js";
-import type { CatalogModel } from "./models.js";
-import { createSessionStore } from "./sessions.js";
-import type { PersistedSession } from "./sessions.js";
-import { LLM_TOOLS, TOOL_DEFINITIONS, ToolError, executeTool } from "./tools/index.js";
-import { promptToText, rebaseHistory, systemMessage } from "./messages.js";
-import { shouldCompact, summarizeTranscript } from "./compaction.js";
-import { connectionKey, createNotifier } from "./connection.js";
+} from "../models.js";
+import type { CatalogModel } from "../models.js";
+import { createSessionStore } from "../sessions/index.js";
+import type { PersistedSession } from "../sessions/index.js";
+import { LLM_TOOLS, TOOL_DEFINITIONS, ToolError, executeTool } from "../tools/index.js";
+import { promptToText, rebaseHistory, systemMessage } from "../messages.js";
+import { shouldCompact, summarizeTranscript } from "../compaction.js";
+import { connectionKey, createNotifier } from "../connection.js";
 import type { SessionState } from "./session-state.js";
 import { createSessionState } from "./session-state.js";
-import type { ToolContext, ToolExecutionResult, ToolName } from "./tools/index.js";
+import type { ToolContext, ToolExecutionResult, ToolName } from "../tools/index.js";
 import {
   connectMcpServers,
   mergeMcpBindings,
   type McpConnection,
   type McpToolBinding,
-} from "./mcp.js";
+} from "../mcp/index.js";
 
 export const AGENT_NAME = "pollinations";
 export const AGENT_TITLE = "Pollinations";
 export const AGENT_VERSION = "1.0.0";
 
-export { promptToText } from "./messages.js";
+export { promptToText } from "../messages.js";
 
 /** Config option id for the reasoning/thought-level selector. */
 const REASONING_CONFIG_ID = "reasoning";
@@ -773,7 +773,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
         const summary = await summarizeTranscript({
           history: session.history,
           model: session.model,
-          llm: llm as import("./llm.js").PollinationsLlm,
+          llm: llm as import("../llm.js").PollinationsLlm,
           signal: abort.signal,
         });
         if (summary) {
@@ -1010,7 +1010,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       const summary = await summarizeTranscript({
   history: session.history,
   model: session.model,
-  llm: llm as import("./llm.js").PollinationsLlm,
+  llm: llm as import("../llm.js").PollinationsLlm,
   signal,
 });
       if (signal.aborted || !summary) throw new Error("compaction produced no summary");
