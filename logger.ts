@@ -11,6 +11,28 @@ import { join } from "node:path";
  *
  * Returns the path of the log file that was opened.
  */
+export interface Logger {
+  info(message: string): void;
+  warn(message: string): void;
+  error(message: string): void;
+  debug(message: string): void;
+}
+
+export class StderrLogger implements Logger {
+  info(message: string): void {
+    process.stderr.write(`${message}\n`);
+  }
+  warn(message: string): void {
+    process.stderr.write(`${message}\n`);
+  }
+  error(message: string): void {
+    process.stderr.write(`${message}\n`);
+  }
+  debug(message: string): void {
+    process.stderr.write(`${message}\n`);
+  }
+}
+
 export function installFileLogger(home: string): string {
   const logDir = join(home, "logs");
   mkdirSync(logDir, { recursive: true });
