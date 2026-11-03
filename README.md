@@ -74,7 +74,11 @@ polli auth login
 `resolveApiKey` checks, in order:
 
 1. `POLLINATIONS_API_KEY`
-2. `$POLLINATIONS_HOME/credentials.json` (default `~/.pollinations/credentials.json`)
+2. the config file: `$POLLINATIONS_HOME/config-acp` (or `config-acp.json`,
+   `config.json`), key `api_key` — `apiKey` and `pollinations_api_key` are
+   accepted too
+3. `$POLLINATIONS_HOME/credentials.json` (default
+   `~/.pollinations/credentials.json`, written by `polli auth login`)
 
 No key at startup is not fatal: `initialize` and session setup still answer so
 the client reports a useful error instead of a dead process. `session/new`
@@ -82,11 +86,11 @@ fails with `-32000` until a key is configured.
 
 ## Configuration
 
-All configuration is via environment variables, optionally overridden by an
-editable file `$POLLINATIONS_HOME/config-acp` (JSON, keys: `model`,
-`base_url`, `permission_mode`, `max_turn_requests`,
-`compaction_threshold_tokens`, `api_key`). Environment variables take
-precedence.
+Configuration is read from environment variables first, then from an editable
+file `$POLLINATIONS_HOME/config-acp` (JSON, also tried as `config-acp.json`
+then `config.json`). Keys: `model`, `base_url`, `permission_mode`,
+`max_turn_requests`, `compaction_threshold_tokens`, `api_key`. Environment
+variables take precedence; only the key falls back to `credentials.json`.
 
 | Variable | Default | Purpose |
 |---|---|---|

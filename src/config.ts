@@ -55,9 +55,9 @@ export type ResolveConfigOptions = {
 /**
  * Reads a Pollinations API key.
  *
- * Order: `POLLINATIONS_API_KEY`, then the `polli auth login` credentials file.
- * Returns an empty string when neither source yields a key, so callers can
- * decide how to report the problem.
+ * Order: `POLLINATIONS_API_KEY`, then the config file, then the `polli auth
+ * login` credentials file. Returns an empty string when no source yields a
+ * key, so callers can decide how to report the problem.
  */
 async function readConfigFile(home: string): Promise<Record<string, unknown>> {
   for (const name of ["config-acp", "config-acp.json", "config.json"]) {
@@ -85,8 +85,11 @@ export async function resolveApiKey(
     env.POLLINATIONS_HOME?.trim() || join(homedir(), ".pollinations");
 
   // Config file (editable) takes precedence over the credentials file.
+  // `api_key` is the documented spelling; `apiKey` and `pollinations_api_key`
+  // are kept because released configurations already use them.
   const configFile = await readConfigFile(home);
-  const fromConfig = configFile.apiKey ?? configFile.pollinations_api_key;
+  const fromConfig =
+    configFile.api_key ?? configFile.apiKey ?? configFile.pollinations_api_key;
   if (typeof fromConfig === "string" && fromConfig.trim()) return fromConfig.trim();
 
   const credentialsFile =
