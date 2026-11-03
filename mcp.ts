@@ -161,64 +161,10 @@ export async function connectMcpServer(config: McpServerConfig): Promise<McpConn
       cursor = typeof listed?.nextCursor === "string" ? listed.nextCursor : undefined;
     } while (cursor);
 
-    for (const raw of rawTools) {
-      if (typeof raw !== "object" || raw === null) continue;
-      const tool = raw as McpTool;
-      if (typeof tool.name !== "string" || tool.name.length === 0) continue;
-      tools.push(tool);
-
-      const bindingName = tool.name;
-      const readOnly = tool.annotations?.readOnlyHint === true;
-      const mutating = !readOnly;
-      const kind: ToolKind = readOnly ? "read" : "other";
-      const parameters =
-        typeof tool.inputSchema === "object" && tool.inputSchema !== null
-          ? (tool.inputSchema as Record<string, unknown>)
-          : { type: "object", properties: {} };
-
-      const binding: McpToolBinding = {
-        name: bindingName,
-        kind,
-        mutating,
-        title: (input) => `${serverName}: ${tool.name}`,
-        call: async (input) => {
-          try {
-            const result = (await send("tools/call", {
-              name: tool.name,
-              arguments: input,
-            })) as { content?: unknown; isError?: boolean } | null;
-            let text = "";
-            if (Array.isArray(result?.content)) {
-              text = (result.content as Array<{ type?: string; text?: string }>)
-                .map((entry) => (entry?.type === "text" ? String(entry.text ?? "") : JSON.stringify(entry)))
-                .join("\n");
-            } else if (result && typeof result === "object") {
-              text = JSON.stringify(result);
-            } else if (typeof result === "string") {
-              text = result;
-            }
-            const output = text || "(no output)";
-            const clipped =
-              output.length <= MAX_MCP_OUTPUT_CHARS
-                ? output
-                : `${output.slice(0, MAX_MCP_OUTPUT_CHARS)}\n… output truncated (${output.length} characters total)`;
-            return { output: clipped, isError: result?.isError === true };
-          } catch (error) {
-            return { output: error instanceof Error ? error.message : String(error), isError: true };
-          }
-        },
-      };
-
-      bindings.set(bindingName, binding);
-      toolDefinitions.push({
-        type: "function",
-        function: {
-          name: bindingName,
-          description: tool.description ?? `MCP tool ${tool.name} from ${serverName}`,
-          parameters,
-        },
-      });
-    }
+    const built = buildMcpBindings(serverName as string, rawTools, send);
+    tools.push(...built.tools);
+    for (const [k,v] of built.bindings) bindings.set(k,v);
+    toolDefinitions.push(...built.toolDefinitions);
   } catch (error) {
     // Degrade: a server that fails to initialize must not take down session/new.
     process.stderr.write(
@@ -350,64 +296,10 @@ export async function connectHttpMcpServer(config: McpServerConfig): Promise<Mcp
       cursor = typeof listed?.nextCursor === "string" ? listed.nextCursor : undefined;
     } while (cursor);
 
-    for (const raw of rawTools) {
-      if (typeof raw !== "object" || raw === null) continue;
-      const tool = raw as McpTool;
-      if (typeof tool.name !== "string" || tool.name.length === 0) continue;
-      tools.push(tool);
-
-      const bindingName = tool.name;
-      const readOnly = tool.annotations?.readOnlyHint === true;
-      const mutating = !readOnly;
-      const kind: ToolKind = readOnly ? "read" : "other";
-      const parameters =
-        typeof tool.inputSchema === "object" && tool.inputSchema !== null
-          ? (tool.inputSchema as Record<string, unknown>)
-          : { type: "object", properties: {} };
-
-      const binding: McpToolBinding = {
-        name: bindingName,
-        kind,
-        mutating,
-        title: (input) => `${serverName}: ${tool.name}`,
-        call: async (input) => {
-          try {
-            const result = (await send("tools/call", {
-              name: tool.name,
-              arguments: input,
-            })) as { content?: unknown; isError?: boolean } | null;
-            let text = "";
-            if (Array.isArray(result?.content)) {
-              text = (result.content as Array<{ type?: string; text?: string }>)
-                .map((entry) => (entry?.type === "text" ? String(entry.text ?? "") : JSON.stringify(entry)))
-                .join("\\n");
-            } else if (result && typeof result === "object") {
-              text = JSON.stringify(result);
-            } else if (typeof result === "string") {
-              text = result;
-            }
-            const output = text || "(no output)";
-            const clipped =
-              output.length <= MAX_MCP_OUTPUT_CHARS
-                ? output
-                : `${output.slice(0, MAX_MCP_OUTPUT_CHARS)}\\n… output truncated (${output.length} characters total)`;
-            return { output: clipped, isError: result?.isError === true };
-          } catch (error) {
-            return { output: error instanceof Error ? error.message : String(error), isError: true };
-          }
-        },
-      };
-
-      bindings.set(bindingName, binding);
-      toolDefinitions.push({
-        type: "function",
-        function: {
-          name: bindingName,
-          description: tool.description ?? `MCP tool ${tool.name} from ${serverName}`,
-          parameters,
-        },
-      });
-    }
+    const built = buildMcpBindings(serverName as string, rawTools, send);
+    tools.push(...built.tools);
+    for (const [k,v] of built.bindings) bindings.set(k,v);
+    toolDefinitions.push(...built.toolDefinitions);
   } catch (error) {
     process.stderr.write(
       `${serverName}: MCP HTTP connection failed (${error instanceof Error ? error.message : String(error)})\\n`,
@@ -567,64 +459,10 @@ export async function connectSseMcpServer(config: McpServerConfig): Promise<McpC
       cursor = typeof listed?.nextCursor === "string" ? listed.nextCursor : undefined;
     } while (cursor);
 
-    for (const raw of rawTools) {
-      if (typeof raw !== "object" || raw === null) continue;
-      const tool = raw as McpTool;
-      if (typeof tool.name !== "string" || tool.name.length === 0) continue;
-      tools.push(tool);
-
-      const bindingName = tool.name;
-      const readOnly = tool.annotations?.readOnlyHint === true;
-      const mutating = !readOnly;
-      const kind: ToolKind = readOnly ? "read" : "other";
-      const parameters =
-        typeof tool.inputSchema === "object" && tool.inputSchema !== null
-          ? (tool.inputSchema as Record<string, unknown>)
-          : { type: "object", properties: {} };
-
-      const binding: McpToolBinding = {
-        name: bindingName,
-        kind,
-        mutating,
-        title: (input) => `${serverName}: ${tool.name}`,
-        call: async (input) => {
-          try {
-            const result = (await send("tools/call", {
-              name: tool.name,
-              arguments: input,
-            })) as { content?: unknown; isError?: boolean } | null;
-            let text = "";
-            if (Array.isArray(result?.content)) {
-              text = (result.content as Array<{ type?: string; text?: string }>)
-                .map((entry) => (entry?.type === "text" ? String(entry.text ?? "") : JSON.stringify(entry)))
-                .join("\\n");
-            } else if (result && typeof result === "object") {
-              text = JSON.stringify(result);
-            } else if (typeof result === "string") {
-              text = result;
-            }
-            const output = text || "(no output)";
-            const clipped =
-              output.length <= MAX_MCP_OUTPUT_CHARS
-                ? output
-                : `${output.slice(0, MAX_MCP_OUTPUT_CHARS)}\\n… output truncated (${output.length} characters total)`;
-            return { output: clipped, isError: result?.isError === true };
-          } catch (error) {
-            return { output: error instanceof Error ? error.message : String(error), isError: true };
-          }
-        },
-      };
-
-      bindings.set(bindingName, binding);
-      toolDefinitions.push({
-        type: "function",
-        function: {
-          name: bindingName,
-          description: tool.description ?? `MCP tool ${tool.name} from ${serverName}`,
-          parameters,
-        },
-      });
-    }
+    const built = buildMcpBindings(serverName as string, rawTools, send);
+    tools.push(...built.tools);
+    for (const [k,v] of built.bindings) bindings.set(k,v);
+    toolDefinitions.push(...built.toolDefinitions);
   } catch (error) {
     process.stderr.write(
       `${serverName}: MCP SSE connection failed (${error instanceof Error ? error.message : String(error)})\\n`,
@@ -643,6 +481,77 @@ export async function connectSseMcpServer(config: McpServerConfig): Promise<McpC
   void pump.catch(() => undefined);
 
   return { name: serverName, tools, bindings, toolDefinitions, close };
+}
+
+function buildMcpBindings(
+  serverName: string,
+  rawTools: unknown[],
+  send: (method: string, params: Record<string, unknown> | null) => Promise<unknown>,
+): { tools: McpTool[]; bindings: Map<string, McpToolBinding>; toolDefinitions: LlmToolDefinition[] } {
+  const tools: McpTool[] = [];
+  const bindings = new Map<string, McpToolBinding>();
+  const toolDefinitions: LlmToolDefinition[] = [];
+
+  for (const raw of rawTools) {
+    if (typeof raw !== "object" || raw === null) continue;
+    const tool = raw as McpTool;
+    if (typeof tool.name !== "string" || tool.name.length === 0) continue;
+    tools.push(tool);
+
+    const bindingName = tool.name;
+    const readOnly = tool.annotations?.readOnlyHint === true;
+    const mutating = !readOnly;
+    const kind: ToolKind = readOnly ? "read" : "other";
+    const parameters =
+      typeof tool.inputSchema === "object" && tool.inputSchema !== null
+        ? (tool.inputSchema as Record<string, unknown>)
+        : { type: "object", properties: {} };
+
+    const binding: McpToolBinding = {
+      name: bindingName,
+      kind,
+      mutating,
+      title: (input) => `${serverName}: ${tool.name}`,
+      call: async (input) => {
+        try {
+          const result = (await send("tools/call", {
+            name: tool.name,
+            arguments: input,
+          })) as { content?: unknown; isError?: boolean } | null;
+          let text = "";
+          if (Array.isArray(result?.content)) {
+            text = (result.content as Array<{ type?: string; text?: string }>)
+              .map((entry) => (entry?.type === "text" ? String(entry.text ?? "") : JSON.stringify(entry)))
+              .join("\\n");
+          } else if (result && typeof result === "object") {
+            text = JSON.stringify(result);
+          } else if (typeof result === "string") {
+            text = result;
+          }
+          const output = text || "(no output)";
+          const clipped =
+            output.length <= MAX_MCP_OUTPUT_CHARS
+              ? output
+              : `${output.slice(0, MAX_MCP_OUTPUT_CHARS)}\\n… output truncated (${output.length} characters total)`;
+          return { output: clipped, isError: result?.isError === true };
+        } catch (error) {
+          return { output: error instanceof Error ? error.message : String(error), isError: true };
+        }
+      },
+    };
+
+    bindings.set(bindingName, binding);
+    toolDefinitions.push({
+      type: "function",
+      function: {
+        name: bindingName,
+        description: tool.description ?? `MCP tool ${tool.name} from ${serverName}`,
+        parameters,
+      },
+    });
+  }
+
+  return { tools, bindings, toolDefinitions };
 }
 
 export function isStdioMcpServer(value: unknown): value is McpServerConfig {
