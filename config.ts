@@ -85,12 +85,11 @@ export async function resolveApiKey(
   return "";
 }
 
-/** Resolves the full agent configuration from the environment. */
-export async function resolveConfig(
-  options: ResolveConfigOptions = {},
-): Promise<AgentConfig> {
-  const env = options.env ?? process.env;
-
+/** Pure resolution of environment-driven fields, given an already-resolved key. */
+export function resolveEnvConfig(
+  env: NodeJS.ProcessEnv,
+  apiKey: string,
+): AgentConfig {
   const permissionMode =
     env.ACP_PERMISSION_MODE?.trim() === "allow" ? "allow" : "ask";
   const maxTurnRequests = Number.parseInt(env.ACP_MAX_TURN_REQUESTS ?? "", 10);
@@ -101,8 +100,8 @@ export async function resolveConfig(
   const home =
     env.POLLINATIONS_HOME?.trim() || join(homedir(), ".pollinations");
 
-  const config = {
-    apiKey: await resolveApiKey(options),
+  return {
+    apiKey,
     baseUrl: (env.POLLINATIONS_BASE_URL?.trim() || DEFAULT_BASE_URL).replace(
       /\/+$/,
       "",
@@ -120,6 +119,15 @@ export async function resolveConfig(
         : DEFAULT_COMPACTION_THRESHOLD_TOKENS,
     permissionMode: permissionMode as "ask" | "allow",
   };
+}
+
+/** Resolves the full agent configuration from the environment. */
+export async function resolveConfig(
+  options: ResolveConfigOptions = {},
+): Promise<AgentConfig> {
+  const env = options.env ?? process.env;
+  const apiKey = await resolveApiKey(options);
+  const config = resolveEnvConfig(env, apiKey);
 
   process.stderr.write(
     `Pollinations: config baseUrl=${config.baseUrl} model=${config.model} ` +

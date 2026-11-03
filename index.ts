@@ -20,6 +20,7 @@ export {
   DEFAULT_MODEL,
   resolveApiKey,
   resolveConfig,
+  resolveEnvConfig,
 } from "./config.js";
 export type { AgentConfig, ResolveConfigOptions } from "./config.js";
 
