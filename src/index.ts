@@ -54,7 +54,7 @@ export {
 } from "./models.js";
 export type { CatalogModel, FetchModelCatalogOptions, ModelGroup, PricingTier } from "./models.js";
 
-export { LLM_TOOLS, TOOL_DEFINITIONS, ToolError, executeTool, globToRegExp } from "./tools.js";
+export { LLM_TOOLS, TOOL_DEFINITIONS, ToolError, executeTool, globToRegExp } from "./tools/index.js";
 export {
   connectMcpServer,
   connectMcpServers,
@@ -69,7 +69,7 @@ export type {
   ToolExecutionResult,
   ToolLocation,
   ToolName,
-} from "./tools.js";
+} from "./tools/index.js";
 
 export {
   LIST_PAGE_SIZE,

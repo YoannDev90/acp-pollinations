@@ -3,7 +3,7 @@ import { createInterface } from "node:readline";
 
 import type { ToolKind } from "@agentclientprotocol/sdk";
 import type { LlmToolDefinition } from "./llm.js";
-import type { ToolExecutionResult, ToolContext } from "./tools.js";
+import type { ToolExecutionResult, ToolContext } from "./tools/index.js";
 
 const MAX_MCP_OUTPUT_CHARS = 20_000;
 

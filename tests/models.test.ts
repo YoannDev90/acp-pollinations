@@ -18,9 +18,9 @@ import {
   inferGroup,
   isKnownModel,
   parseModelCatalog,
-} from "../models.js";
-import type { CatalogModel } from "../models.js";
-import { DEFAULT_MODEL } from "../config.js";
+} from "../src/models.js";
+import type { CatalogModel } from "../src/models.js";
+import { DEFAULT_MODEL } from "../src/config.js";
 import {
   FAKE_MODELS_PAYLOAD,
   startFakeLlmServer,

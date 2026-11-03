@@ -1,6 +1,6 @@
 import type { LlmMessage } from "./llm.js";
 import type { McpConnection, McpToolBinding } from "./mcp.js";
-import type { ToolName } from "./tools.js";
+import type { ToolName } from "./tools/index.js";
 
 export type SessionState = {
   id: string;

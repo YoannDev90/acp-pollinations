@@ -5,9 +5,9 @@ import { PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 import type { SessionConfigOption, SessionConfigSelectGroup, ClientSessionCapabilities } from "@agentclientprotocol/sdk";
 import { afterAll, describe, expect, it } from "vitest";
 
-import type { AgentConfig } from "../config.js";
-import { PollinationsLlm } from "../llm.js";
-import { createPollinationsAgent, promptToText } from "../server.js";
+import type { AgentConfig } from "../src/config.js";
+import { PollinationsLlm } from "../src/llm.js";
+import { createPollinationsAgent, promptToText } from "../src/server.js";
 import { withInProcessClient } from "./helpers/acp-client.js";
 import type { Harness } from "./helpers/acp-client.js";
 import { startFakeLlmServer } from "./helpers/fake-llm-server.js";

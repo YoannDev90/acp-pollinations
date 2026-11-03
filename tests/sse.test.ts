@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createSseParser } from "../sse.js";
+import { createSseParser } from "../src/sse.js";
 
 describe("createSseParser", () => {
   it("parses complete frames and keeps the trailing partial one", () => {

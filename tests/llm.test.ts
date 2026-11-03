@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { LlmError, PollinationsLlm } from "../llm.js";
-import type { LlmChunk, LlmChatParams, LlmMessage, LlmUsage } from "../llm.js";
+import { LlmError, PollinationsLlm } from "../src/llm.js";
+import type { LlmChunk, LlmChatParams, LlmMessage, LlmUsage } from "../src/llm.js";
 import { startFakeLlmServer } from "./helpers/fake-llm-server.js";
 
 function llmFor(baseUrl: string): PollinationsLlm {

@@ -8,9 +8,9 @@ import { ndJsonStream } from "@agentclientprotocol/sdk";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { resolveConfig } from "../config.js";
-import { installFileLogger } from "../logger.js";
-import { AGENT_TITLE, AGENT_VERSION, createPollinationsAgent } from "../server.js";
+import { resolveConfig } from "../src/config.js";
+import { installFileLogger } from "../src/logger.js";
+import { AGENT_TITLE, AGENT_VERSION, createPollinationsAgent } from "../src/server.js";
 
 const config = await resolveConfig();
 

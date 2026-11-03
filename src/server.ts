@@ -32,13 +32,13 @@ import {
 import type { CatalogModel } from "./models.js";
 import { createSessionStore } from "./sessions.js";
 import type { PersistedSession } from "./sessions.js";
-import { LLM_TOOLS, TOOL_DEFINITIONS, ToolError, executeTool } from "./tools.js";
+import { LLM_TOOLS, TOOL_DEFINITIONS, ToolError, executeTool } from "./tools/index.js";
 import { promptToText, rebaseHistory, systemMessage } from "./messages.js";
 import { shouldCompact, summarizeTranscript } from "./compaction.js";
 import { connectionKey, createNotifier } from "./connection.js";
 import type { SessionState } from "./session-state.js";
 import { createSessionState } from "./session-state.js";
-import type { ToolContext, ToolExecutionResult, ToolName } from "./tools.js";
+import type { ToolContext, ToolExecutionResult, ToolName } from "./tools/index.js";
 import {
   connectMcpServers,
   mergeMcpBindings,

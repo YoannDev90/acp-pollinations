@@ -4,8 +4,8 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import type { AgentContext } from "@agentclientprotocol/sdk";
 
-import { LLM_TOOLS, TOOL_DEFINITIONS, executeTool, globToRegExp } from "../tools.js";
-import type { ToolContext, ToolExecutionResult } from "../tools.js";
+import { LLM_TOOLS, TOOL_DEFINITIONS, executeTool, globToRegExp } from "../src/tools/index.js";
+import type { ToolContext, ToolExecutionResult } from "../src/tools/index.js";
 import { createTmpDir } from "./helpers/tmp.js";
 
 /** Workspaces are created per test and removed once the file finishes. */
