@@ -35,6 +35,7 @@ import type { PersistedSession } from "./sessions.js";
 import { LLM_TOOLS, TOOL_DEFINITIONS, ToolError, executeTool } from "./tools.js";
 import { promptToText, rebaseHistory, systemMessage } from "./messages.js";
 import { shouldCompact, summarizeTranscript } from "./compaction.js";
+import { connectionKey, createNotifier } from "./connection.js";
 import type { SessionState } from "./session-state.js";
 import { createSessionState } from "./session-state.js";
 import type { ToolContext, ToolExecutionResult, ToolName } from "./tools.js";
@@ -1354,18 +1355,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
  * Helpers
  * ------------------------------------------------------------------ */
 
-type Notifier = (update: import("@agentclientprotocol/sdk").SessionUpdate) => Promise<void>;
-
-/** Fire-and-forget `session/update` sender that never fails the turn. */
-function createNotifier(client: AgentContext, sessionId: string): Notifier {
-  return async (update) => {
-    try {
-      await client.notify(methods.client.session.update, { sessionId, update });
-    } catch {
-      // The client disappeared mid-turn; the abort signal handles the rest.
-    }
-  };
-}
+type Notifier = ReturnType<typeof createNotifier>;
 
 function nextMessageId(session: SessionState): string {
   session.messageCounter += 1;
@@ -1417,52 +1407,4 @@ function toRequestError(error: unknown): RequestError {
     undefined,
     error instanceof Error ? error.message : String(error),
   );
-}
-
-/** Identifies the connection a request arrived on, for per-connection state. */
-const connectionIds = new WeakMap<object, string>();
-let connectionCounter = 0;
-
-/**
- * Keys state that `initialize` supplies and later requests must read back.
- *
- * The client capabilities are one example: they are sent once per connection,
- * but every request handler that needs them receives a *different*
- * `AgentContext` instance, so object identity on the context itself never
- * matches. What is stable for a connection is its internal connection context —
- * the same value the SDK's own `AcpContext[connectionContextOf]()` returns,
- * which is documented as identifying the connection. That helper is not
- * exported, so the field it wraps is read directly.
- *
- * If a future SDK stops exposing it, `cx` is absent, the key degrades to the
- * context object itself and never matches — the capabilities come back `null`,
- * which is the behaviour this function exists to move away from, rather than a
- * crash.
- */
-function connectionKey(client: AgentContext): string {
-  // Identify the connection behind an ACP context. The SDK keeps it behind a
-  // symbol-keyed method; find that symbol instead of hard-coding `cx`, so a
-  // renamed field does not silently break capability lookup.
-  let identity: object = client as object;
-  try {
-    const symbol = [
-      ...Object.getOwnPropertySymbols(client),
-      ...Object.getOwnPropertySymbols(Object.getPrototypeOf(client) ?? {}),
-    ].find((candidate) => candidate.toString().includes("connectionContextOf"));
-    if (symbol) {
-      const context = (client as unknown as Record<symbol, () => unknown>)[symbol];
-      if (typeof context === "function") identity = context.call(client) as object;
-    } else {
-      identity = ((client as unknown as { cx?: unknown }).cx ?? client) as object;
-    }
-  } catch {
-    identity = ((client as unknown as { cx?: unknown }).cx ?? client) as object;
-  }
-
-  let key = connectionIds.get(identity);
-  if (!key) {
-    key = `conn_${(connectionCounter += 1)}`;
-    connectionIds.set(identity, key);
-  }
-  return key;
 }
