@@ -1,10 +1,15 @@
 // Smoke check against the real Pollinations catalogue.
 // Run: npx tsx scripts/check-catalogue.ts
+import type {
+  SessionConfigSelectGroup,
+  SessionConfigSelectOption,
+} from "@agentclientprotocol/sdk";
+
 import {
   buildModelOption,
   fetchModelCatalog,
-} from "../models.js";
-import { DEFAULT_MODEL } from "../config.js";
+} from "../src/models.js";
+import { DEFAULT_MODEL } from "../src/config.js";
 
 const models = await fetchModelCatalog({ baseUrl: "https://gen.pollinations.ai" });
 
@@ -18,7 +23,15 @@ const option = buildModelOption(models, DEFAULT_MODEL);
 
 console.log(`\npicker: id=${option.id} type=${option.type} category=${option.category}`);
 console.log(`currentValue=${option.currentValue}`);
-const groups = option.options as Array<{ group: string; name: string; options: Array<{ value: string; name: string; description?: string | null }> }>;
+// The picker is always a select group; anything else would mean
+// `buildModelOption` changed shape, and the rest of this script would be
+// printing nonsense rather than failing.
+if (option.type !== "select") throw new Error(`expected a select option, got ${option.type}`);
+// A select may be a flat list of options or a list of groups; the picker this
+// script inspects is always grouped, so anything ungrouped is filtered out
+// rather than walked as if it had a group.
+const options: Array<SessionConfigSelectOption | SessionConfigSelectGroup> = option.options;
+const groups = options.filter((entry): entry is SessionConfigSelectGroup => "group" in entry);
 console.log(`groups: ${groups.map((g) => `${g.group}(${g.options.length})`).join(", ")}`);
 
 // The default is normally listed; a model the catalogue has not caught up

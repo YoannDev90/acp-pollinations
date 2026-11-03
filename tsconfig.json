@@ -17,6 +17,9 @@
     "declaration": true,
     "sourceMap": true
   },
-  "include": ["src/**/*.ts", "bin/**/*.ts", "tests/**/*.ts"],
+  // `scripts/` is included so a bad import there fails `npm run typecheck`
+  // instead of only when someone runs `npm run models`. The publishable build
+  // still drops it through `tsconfig.build.json`.
+  "include": ["src/**/*.ts", "bin/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }
