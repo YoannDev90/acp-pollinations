@@ -22,7 +22,8 @@ export async function summarizeTranscript(params: {
   ];
 
   let text = "";
-  // No tools: a summarising request must never trigger real work.
+  // No tools: a summarising request must never trigger real work. No
+  // reasoning effort either — see the note at the call site in `maybeCompact`.
   const iterator = params.llm.chat({ messages: request, model: params.model, signal: params.signal });
   for (;;) {
     const { done, value } = await iterator.next();

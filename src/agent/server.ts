@@ -1096,6 +1096,10 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       messages: session.history,
       tools,
       model: session.model,
+      // The ACP reasoning selector only reaches the model through here.
+      // Compaction deliberately leaves it out: summarising is a cheap request
+      // and reasoning would multiply its cost and latency for no gain.
+      reasoningEffort: session.reasoningLevel,
       signal,
     });
 

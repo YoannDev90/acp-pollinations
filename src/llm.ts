@@ -61,6 +61,13 @@ export type LlmChatParams = {
    * uses it to honour per-session model switches from the ACP model picker.
    */
   model?: string;
+  /**
+   * Reasoning depth for this request, sent as `reasoning_effort`.
+   *
+   * The ACP reasoning selector is only as real as this field: without it the
+   * control is stored, persisted, and never reaches the model.
+   */
+  reasoningEffort?: string;
   signal?: AbortSignal;
 };
 
@@ -117,6 +124,10 @@ export class PollinationsLlm {
   async *chat(params: LlmChatParams): AsyncGenerator<LlmChunk, LlmUsage> {
     const maxAttempts = 4;
 
+    // Cleared for the rest of this call if the endpoint proves it will not
+    // take the parameter for this model; see `rejectsReasoningEffort`.
+    let reasoningEffort = params.reasoningEffort;
+
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       const controller = new AbortController();
       const onAbort = () => controller.abort();
@@ -132,6 +143,7 @@ export class PollinationsLlm {
           stream: true,
         };
         if (params.tools && params.tools.length > 0) body.tools = params.tools;
+        if (reasoningEffort !== undefined) body.reasoning_effort = reasoningEffort;
 
         const response = await this.fetchImpl(`${this.baseUrl}/v1/chat/completions`, {
           method: "POST",
@@ -146,6 +158,11 @@ export class PollinationsLlm {
 
         if (!response.ok) {
           const errorBody = await response.text().catch(() => "");
+          if (reasoningEffort !== undefined && rejectsReasoningEffort(response.status, errorBody)) {
+            // One request without the knob beats losing the turn to it.
+            reasoningEffort = undefined;
+            continue;
+          }
           const retryable = isRetryableResponse(response.status, errorBody);
           if (retryable && attempt < maxAttempts - 1 && !params.signal?.aborted) {
             await sleep(retryDelayMs(response, attempt), params.signal);
@@ -266,11 +283,23 @@ function normalizeUsage(raw: NonNullable<StreamPayload["usage"]>): LlmUsage {
   };
 }
 
-/** Turns an error response body into a human-readable suffix. */
 /** Whether a failed response is worth retrying (rate limits, transient 5xx). */
 function isRetryableResponse(status: number, body: string): boolean {
   if (status === 429 || status === 502 || status === 503 || status === 504) return true;
   return /too many requests|rate limit/i.test(body);
+}
+
+/**
+ * Whether a failure says the model refused `reasoning_effort`.
+ *
+ * Pollinations routes to models that do not all accept the parameter, and
+ * answers some of them with a 4xx or 5xx that names it rather than dropping
+ * the unknown field. A request retried once without it is cheaper than a turn
+ * lost to a settings knob.
+ */
+function rejectsReasoningEffort(status: number, body: string): boolean {
+  if (status !== 400 && status !== 422 && status !== 500) return false;
+  return /reasoning/i.test(body);
 }
 
 /** Whether a thrown error is worth retrying. */
@@ -317,6 +346,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+/** Turns an error response body into a human-readable suffix. */
 function describePollinationsError(body: string): string {
   if (!body) return "";
   try {

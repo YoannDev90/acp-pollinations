@@ -304,6 +304,28 @@ describe("model picker", () => {
     });
   });
 
+  it("forwards the selected reasoning effort to the model", async () => {
+    await withAgent([{ text: "first" }, { text: "second" }], {}, async ({ harness, server }) => {
+      // The selector is only real if its value reaches the endpoint: a knob
+      // that is stored and silently dropped is worse than no knob at all.
+      await harness.prompt("default level");
+      expect(server.requests[0]?.reasoning_effort).toBe("medium");
+
+      const response = await harness.ctx.request("session/set_config_option", {
+        sessionId: harness.session.sessionId,
+        configId: "reasoning",
+        value: "high",
+      });
+
+      expect((response.configOptions ?? []).find((option) => option.id === "reasoning")?.currentValue).toBe(
+        "high",
+      );
+
+      await harness.prompt("after the switch");
+      expect(server.requests[1]?.reasoning_effort).toBe("high");
+    });
+  });
+
   it("keeps each session's model independent", async () => {
     const server = await startFakeLlmServer([{ text: "ok" }]);
     servers.push(server);

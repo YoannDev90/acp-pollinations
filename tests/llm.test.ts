@@ -17,6 +17,7 @@ async function runChat(
     messages: params.messages ?? [{ role: "user", content: "hi" }],
     ...(params.tools ? { tools: params.tools } : {}),
     ...(params.model ? { model: params.model } : {}),
+    ...(params.reasoningEffort !== undefined ? { reasoningEffort: params.reasoningEffort } : {}),
     ...(params.signal ? { signal: params.signal } : {}),
   });
 
@@ -128,6 +129,45 @@ describe("PollinationsLlm", () => {
     await runChat(server.baseUrl);
 
     expect(server.requests[0]).not.toHaveProperty("tools");
+    await server.close();
+  });
+
+  it("sends the reasoning effort when one is asked for", async () => {
+    const server = await startFakeLlmServer([{ text: "ok" }]);
+
+    await runChat(server.baseUrl, { reasoningEffort: "high" });
+
+    expect(server.requests[0]?.reasoning_effort).toBe("high");
+    await server.close();
+  });
+
+  it("omits the reasoning key when no effort is asked for", async () => {
+    const server = await startFakeLlmServer([{ text: "ok" }]);
+
+    await runChat(server.baseUrl);
+
+    expect(server.requests[0]).not.toHaveProperty("reasoning_effort");
+    await server.close();
+  });
+
+  it("retries once without the reasoning effort when the model refuses it", async () => {
+    const server = await startFakeLlmServer([{ text: "ok" }], {
+      failOnceWith: {
+        status: 500,
+        body: JSON.stringify({
+          error: { message: "reasoning_effort is not supported by this model" },
+        }),
+      },
+    });
+
+    const { chunks } = await runChat(server.baseUrl, { reasoningEffort: "high" });
+
+    // The turn survives a model that will not take the parameter: the first
+    // request carries it, the corrected one does not.
+    expect(textOf(chunks)).toBe("ok");
+    expect(server.requests).toHaveLength(2);
+    expect(server.requests[0]?.reasoning_effort).toBe("high");
+    expect(server.requests[1]).not.toHaveProperty("reasoning_effort");
     await server.close();
   });
 

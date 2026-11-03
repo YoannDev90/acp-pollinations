@@ -23,6 +23,8 @@ export type RecordedRequest = {
   tools?: Array<{ function: { name: string } }>;
   stream: boolean;
   authorization?: string;
+  /** Present when the agent asked the model for a reasoning depth. */
+  reasoning_effort?: string;
 };
 
 export type FakeLlmServer = {
@@ -38,6 +40,11 @@ export type FakeLlmServer = {
 export type FakeLlmOptions = {
   /** When set, every chat-completion call fails with this status and body. */
   failWith?: { status: number; body: string };
+  /**
+   * When set, only the first chat-completion call fails. Used to exercise a
+   * client that corrects its request and sends it again.
+   */
+  failOnceWith?: { status: number; body: string };
   /** Raw body served from `GET /v1/models`. Defaults to a small catalogue. */
   modelsPayload?: unknown;
   /** When set, `GET /v1/models` fails instead, to exercise the offline path. */
@@ -141,6 +148,7 @@ export async function startFakeLlmServer(
 ): Promise<FakeLlmServer> {
   const requests: RecordedRequest[] = [];
   let cursor = 0;
+  let failedOnce = false;
 
   const server = createServer((req, res) => {
     // A scripted outage of the catalogue endpoint, independent of `failWith`,
@@ -181,6 +189,13 @@ export async function startFakeLlmServer(
       if (options.failWith) {
         res.writeHead(options.failWith.status, { "Content-Type": "application/json" });
         res.end(options.failWith.body);
+        return;
+      }
+
+      if (options.failOnceWith && !failedOnce) {
+        failedOnce = true;
+        res.writeHead(options.failOnceWith.status, { "Content-Type": "application/json" });
+        res.end(options.failOnceWith.body);
         return;
       }
 
