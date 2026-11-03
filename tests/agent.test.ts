@@ -836,6 +836,174 @@ describe("compaction", () => {
   });
 });
 
+describe("slash commands", () => {
+  it("advertises exactly the commands /help prints", async () => {
+    await withAgent([{ text: "unused" }], {}, async ({ harness }) => {
+      // The notification is deferred by the agent so a client has attached its
+      // update handler first; give it time to land before the first prompt.
+      await new Promise((resolve) => setTimeout(resolve, 120));
+
+      await harness.prompt("/help");
+      const help = agentText(harness.updates);
+
+      const advertised = harness.updates.find(
+        (update) => update.sessionUpdate === "available_commands_update",
+      ) as { availableCommands?: Array<{ name: string; description: string }> } | undefined;
+
+      expect(advertised?.availableCommands?.length).toBeGreaterThan(0);
+      // One table drives both: a command that is implemented but unlisted, or
+      // listed but unimplemented, is exactly the drift this refactor removes.
+      for (const command of advertised?.availableCommands ?? []) {
+        expect(help).toContain(`/${command.name}`);
+        expect(help).toContain(command.description);
+      }
+      expect(help).toContain("/delete");
+    });
+  });
+
+  it("answers /status without reaching the model", async () => {
+    await withAgent([{ text: "unused" }], {}, async ({ harness, server }) => {
+      const before = server.requests.length;
+      await harness.prompt("/status");
+
+      const text = agentText(harness.updates);
+      expect(text).toContain("Model: test-model");
+      expect(text).toContain("Reasoning: medium");
+      expect(server.requests).toHaveLength(before);
+    });
+  });
+
+  it("shows, switches, and rejects a model through /model", async () => {
+    await withAgent([{ text: "unused" }], {}, async ({ harness, server }) => {
+      await harness.prompt("/model");
+      expect(agentText(harness.updates)).toContain("Current model: test-model");
+      expect(server.requests).toHaveLength(0);
+
+      await harness.prompt("/model official/quest-a");
+      expect(agentText(harness.updates)).toContain("Switched model to official/quest-a.");
+
+      await harness.prompt("/model does/not-exist");
+      expect(agentText(harness.updates)).toContain('Unknown model "does/not-exist".');
+      // The rejected switch must not have taken effect.
+      await harness.prompt("/model");
+      expect(agentText(harness.updates)).toContain("Current model: official/quest-a");
+    });
+  });
+
+  it("switches mode and reports the change to the client", async () => {
+    await withAgent([{ text: "unused" }], {}, async ({ harness }) => {
+      await harness.prompt("/mode plan");
+
+      expect(agentText(harness.updates)).toContain("Switched mode to plan.");
+      const modeUpdate = harness.updates.find(
+        (update) => update.sessionUpdate === "current_mode_update",
+      ) as { currentModeId?: string } | undefined;
+      expect(modeUpdate?.currentModeId).toBe("plan");
+
+      await harness.prompt("/mode nope");
+      expect(agentText(harness.updates)).toContain('Unknown mode "nope". Available: build, plan, ask.');
+    });
+  });
+
+  it("switches reasoning effort and republishes the picker", async () => {
+    await withAgent([{ text: "unused" }], {}, async ({ harness, server }) => {
+      await harness.prompt("/reasoning high");
+
+      expect(agentText(harness.updates)).toContain("Switched reasoning level to high.");
+      const configUpdate = harness.updates.find(
+        (update) => update.sessionUpdate === "config_option_update",
+      ) as { configOptions?: Array<{ id: string; currentValue?: string }> } | undefined;
+      expect(configUpdate?.configOptions?.find((option) => option.id === "reasoning")?.currentValue).toBe(
+        "high",
+      );
+
+      // The new level is what the next request carries.
+      await harness.prompt("hello");
+      expect(server.requests.at(-1)?.reasoning_effort).toBe("high");
+
+      await harness.prompt("/reasoning extreme");
+      expect(agentText(harness.updates)).toContain('Unknown reasoning level "extreme".');
+    });
+  });
+
+  it("clears the transcript without calling the model", async () => {
+    await withAgent([{ text: "first answer" }], {}, async ({ harness, server }) => {
+      await harness.prompt("first question");
+      expect(server.requests).toHaveLength(1);
+
+      await harness.prompt("/clear");
+      expect(agentText(harness.updates)).toContain("Conversation cleared.");
+      expect(server.requests).toHaveLength(1);
+
+      // The earlier exchange is gone from what the model sees next.
+      await harness.prompt("second question");
+      const messages = server.requests[1]?.messages ?? [];
+      expect(JSON.stringify(messages)).not.toContain("first question");
+      expect(JSON.stringify(messages)).toContain("second question");
+    });
+  });
+
+  it("reports cost, tools, and an empty session list without a model call", async () => {
+    const state = await createTmpDir("acp-cmds");
+    cleanups.push(state.cleanup);
+
+    await withAgent([{ text: "unused" }], { sessionsDir: state.path }, async ({ harness, server }) => {
+      await harness.prompt("/cost");
+      expect(agentText(harness.updates)).toContain("Tokens (last request):");
+
+      await harness.prompt("/tools");
+      const tools = agentText(harness.updates);
+      expect(tools).toContain("read_file");
+      expect(tools).toContain("bash");
+      expect(tools).toContain("MCP tools: (none)");
+
+      await harness.prompt("/sessions");
+      // Only this session exists, and it is listed by id.
+      expect(agentText(harness.updates)).toContain(harness.session.sessionId);
+
+      expect(server.requests).toHaveLength(0);
+    });
+  });
+
+  it("says there is nothing to compact on a fresh transcript", async () => {
+    await withAgent([{ text: "unused" }], {}, async ({ harness, server }) => {
+      await harness.prompt("/compact");
+
+      expect(agentText(harness.updates)).toContain("Nothing to compact.");
+      expect(server.requests).toHaveLength(0);
+    });
+  });
+
+  it("deletes the session and stops persisting it", async () => {
+    const state = await createTmpDir("acp-cmd-del");
+    cleanups.push(state.cleanup);
+
+    await withAgent([{ text: "unused" }], { sessionsDir: state.path }, async ({ harness }) => {
+      const id = harness.session.sessionId;
+      expect(await readdir(state.path)).toContain(`${id}.json`);
+
+      await harness.prompt("/delete");
+      expect(agentText(harness.updates)).toContain("Session deleted.");
+      // The reply must not be written back: persisting would resurrect the
+      // file the command just removed.
+      expect(await readdir(state.path)).not.toContain(`${id}.json`);
+    });
+  });
+
+  it("sends an unknown command and an argument on a plain command to the model", async () => {
+    await withAgent([{ text: "reply" }, { text: "reply" }], {}, async ({ harness, server }) => {
+      await harness.prompt("/frobnicate");
+      expect(server.requests).toHaveLength(1);
+      expect(server.requests[0]?.messages.some((m) => String(m.content).includes("/frobnicate"))).toBe(true);
+
+      // `/clear now` is not a shorter way to say `/clear`; it is a message.
+      await harness.prompt("/clear now");
+      expect(server.requests).toHaveLength(2);
+      expect(server.requests[1]?.messages.some((m) => String(m.content).includes("/clear now"))).toBe(true);
+    });
+  });
+});
+
 describe("promptToText", () => {
   it("joins blocks with a blank line and describes embedded resources", () => {
     expect(

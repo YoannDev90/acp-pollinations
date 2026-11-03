@@ -68,19 +68,25 @@ const AVAILABLE_MODES: ReadonlyArray<{ id: string; name: string; description: st
   { id: "ask", name: "Ask", description: "Answer questions" },
 ];
 
-const AVAILABLE_COMMANDS: ReadonlyArray<{ name: string; description: string }> = [
-  { name: "help", description: "Show available commands" },
-  { name: "status", description: "Show session status" },
-  { name: "model", description: "Show or switch the model" },
-  { name: "mode", description: "Show or switch Build/Plan/Ask" },
-  { name: "reasoning", description: "Show or set reasoning effort" },
-  { name: "clear", description: "Clear the conversation" },
-  { name: "cost", description: "Show token usage and cost" },
-  { name: "tools", description: "List available tools" },
-  { name: "compact", description: "Compact the context" },
-  { name: "sessions", description: "List persisted sessions" },
-  { name: "delete", description: "Delete this session" },
-];
+/** What a slash command is handed when it runs. */
+type SlashCommandContext = {
+  session: SessionState;
+  notify: Notifier;
+  /** The single token after the command's name; empty when there is none. */
+  arg: string;
+  /** Aborted when the client cancels; `/compact` streams its summary under it. */
+  signal: AbortSignal;
+};
+
+/** One entry of the slash-command table. */
+type SlashCommand = {
+  /** Shown by `/help` and in the `available_commands_update` notice. */
+  description: string;
+  /** Whether a token after the name belongs to this command at all. */
+  takesArg: boolean;
+  /** Produces the text sent back as the assistant's turn. */
+  run: (context: SlashCommandContext) => Promise<string>;
+};
 
 export type CreatePollinationsAgentOptions = {
   config: AgentConfig;
@@ -154,6 +160,159 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       return models;
     }
   }
+
+  /* ---------------------------------------------------------------- *
+   * Slash commands
+   * ---------------------------------------------------------------- */
+
+  /**
+   * Every slash command, in one table.
+   *
+   * `/help`, the `available_commands_update` notification, and the dispatch in
+   * the prompt handler are all derived from this, so a command cannot be
+   * advertised without being implemented, or implemented without being
+   * advertised. Handlers return the reply text; the plumbing around them —
+   * replaying the user's prompt, echoing the answer, persisting — is shared
+   * instead of being copied into every branch.
+   */
+  const SLASH_COMMANDS: Record<string, SlashCommand> = {
+    help: {
+      description: "Show available commands",
+      takesArg: true,
+      run: async () =>
+        "Available commands:\n" +
+        Object.entries(SLASH_COMMANDS)
+          .map(([name, command]) => `- /${name.padEnd(10)}${command.description}`)
+          .join("\n"),
+    },
+    status: {
+      description: "Show session status",
+      takesArg: true,
+      run: async ({ session }) =>
+        `Session: ${session.id}\n` +
+        `Model: ${session.model}\n` +
+        `Mode: ${session.mode}\n` +
+        `Reasoning: ${session.reasoningLevel}\n` +
+        `Last prompt tokens: ${session.lastPromptTokens}\n` +
+        `Cost so far: ${session.costSoFar.toFixed(6)} pollen`,
+    },
+    model: {
+      description: "Show or switch the model",
+      takesArg: true,
+      run: async ({ session, arg }) => {
+        if (!arg) return `Current model: ${session.model}`;
+        const models = await modelCatalog();
+        if (!isKnownModel(models, arg) && arg !== session.model) {
+          return `Unknown model "${arg}".`;
+        }
+        session.model = arg;
+        return `Switched model to ${session.model}.`;
+      },
+    },
+    mode: {
+      description: "Show or switch Build/Plan/Ask",
+      takesArg: true,
+      run: async ({ session, notify, arg }) => {
+        if (!arg) return `Current mode: ${session.mode}`;
+        if (!AVAILABLE_MODES.some((mode) => mode.id === arg)) {
+          return `Unknown mode "${arg}". Available: ${AVAILABLE_MODES.map((mode) => mode.id).join(", ")}.`;
+        }
+        session.mode = arg;
+        await notify({ sessionUpdate: "current_mode_update", currentModeId: arg });
+        return `Switched mode to ${session.mode}.`;
+      },
+    },
+    reasoning: {
+      description: "Show or set reasoning effort",
+      takesArg: true,
+      run: async ({ session, notify, arg }) => {
+        if (!arg) return `Current reasoning level: ${session.reasoningLevel}`;
+        if (!REASONING_LEVELS.some((level) => level.value === arg)) {
+          return `Unknown reasoning level "${arg}". Available: ${REASONING_LEVELS.map((level) => level.value).join(", ")}.`;
+        }
+        session.reasoningLevel = arg;
+        const models = await modelCatalog();
+        await notify({
+          sessionUpdate: "config_option_update",
+          configOptions: [buildModelOption(models, session.model), buildReasoningOption(arg)],
+        });
+        return `Switched reasoning level to ${session.reasoningLevel}.`;
+      },
+    },
+    clear: {
+      description: "Clear the conversation",
+      takesArg: false,
+      run: async ({ session }) => {
+        session.history = [systemMessage(session.cwd)];
+        session.lastPromptTokens = 0;
+        session.costSoFar = 0;
+        session.title = undefined;
+        return "Conversation cleared.";
+      },
+    },
+    cost: {
+      description: "Show token usage and cost",
+      takesArg: false,
+      run: async ({ session }) =>
+        `Tokens (last request): ${session.lastPromptTokens}\nCost so far: ${session.costSoFar.toFixed(6)} USD`,
+    },
+    tools: {
+      description: "List available tools",
+      takesArg: false,
+      run: async ({ session }) => {
+        const mcp = [...session.mcpTools.keys()];
+        return (
+          `Built-in tools: ${Object.keys(TOOL_DEFINITIONS).join(", ")}\n` +
+          `MCP tools: ${mcp.length ? mcp.join(", ") : "(none)"}`
+        );
+      },
+    },
+    compact: {
+      description: "Compact the context",
+      takesArg: false,
+      run: async ({ session, signal }) => {
+        if (session.history.length < 3) return "Nothing to compact.";
+        const summary = await summarizeTranscript({
+          history: session.history,
+          model: session.model,
+          llm: llm as PollinationsLlm,
+          signal,
+        });
+        if (summary) {
+          session.history = [session.history[0] as LlmMessage, { role: "assistant", content: summary }];
+          session.lastPromptTokens = 0;
+        }
+        return summary ? "Compacted." : "Compaction failed.";
+      },
+    },
+    sessions: {
+      description: "List persisted sessions",
+      takesArg: false,
+      run: async ({ session }) => {
+        const { sessions: page } = await store.list({ cwd: session.cwd });
+        return page.length
+          ? page.map((entry) => `${entry.id}  ${entry.updatedAt}`).join("\n")
+          : "No persisted sessions.";
+      },
+    },
+    delete: {
+      description: "Delete this session",
+      takesArg: false,
+      run: async ({ session }) => {
+        await store.remove(session.id);
+        for (const connection of session.mcpConnections) connection.close();
+        session.deleted = true;
+        sessions.delete(session.id);
+        return "Session deleted.";
+      },
+    },
+  };
+
+  /** Command list advertised to the client, derived from the table above. */
+  const availableCommands = Object.entries(SLASH_COMMANDS).map(([name, command]) => ({
+    name,
+    description: command.description,
+  }));
 
   const app = agent({ name: AGENT_NAME });
 
@@ -230,7 +389,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     setTimeout(() => {
       void notify({
         sessionUpdate: "available_commands_update",
-        availableCommands: [...AVAILABLE_COMMANDS],
+        availableCommands,
       });
     }, 50);
     session.mcpConnections = connections;
@@ -602,241 +761,21 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       // render the `available_commands_update` notification.
       const promptText = promptToText(ctx.params.prompt).trim();
 
-      if (promptText === "/status" || promptText.startsWith("/status ")) {
+      // Slash commands resolve against the table, so what `/help` lists and what
+      // `available_commands_update` advertises is what actually runs. An unknown
+      // `/foo`, or a command given an argument it does not take, still reaches
+      // the model as a plain message would.
+      const matched = matchSlashCommand(promptText, SLASH_COMMANDS);
+
+      if (matched) {
         await replayUserPrompt(ctx.params.prompt, notify, session);
-        const statusText =
-          `Session: ${session.id}\n` +
-          `Model: ${session.model}\n` +
-          `Mode: ${session.mode}\n` +
-          `Reasoning: ${session.reasoningLevel}\n` +
-          `Last prompt tokens: ${session.lastPromptTokens}\n` +
-          `Cost so far: ${session.costSoFar.toFixed(6)} pollen`;
-        const messageId = nextMessageId(session);
-        await notify({
-          sessionUpdate: "agent_message_chunk",
-          messageId,
-          content: { type: "text", text: statusText },
-        });
-        session.history.push({ role: "assistant", content: statusText, reasoning_content: "" });
-        await persist(session);
-        return { stopReason: "end_turn" };
-      }
-
-      if (promptText === "/model" || promptText.startsWith("/model ")) {
-        await replayUserPrompt(ctx.params.prompt, notify, session);
-        const parts = promptText.split(/\s+/);
-        const requested = parts[1];
-        if (!requested) {
-          const text = `Current model: ${session.model}`;
-          const messageId = nextMessageId(session);
-          await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
-          session.history.push({ role: "assistant", content: text, reasoning_content: "" });
-          await persist(session);
-          return { stopReason: "end_turn" };
-        }
-
-        const models = await modelCatalog();
-        if (!isKnownModel(models, requested) && requested !== session.model) {
-          const text = `Unknown model "${requested}".`;
-          const messageId = nextMessageId(session);
-          await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
-          session.history.push({ role: "assistant", content: text, reasoning_content: "" });
-          await persist(session);
-          return { stopReason: "end_turn" };
-        }
-
-        session.model = requested;
-        await persist(session);
-        const text = `Switched model to ${session.model}.`;
-        const messageId = nextMessageId(session);
-        await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
-        session.history.push({ role: "assistant", content: text, reasoning_content: "" });
-        await persist(session);
-        return { stopReason: "end_turn" };
-      }
-
-      if (promptText === "/mode" || promptText.startsWith("/mode ")) {
-        await replayUserPrompt(ctx.params.prompt, notify, session);
-        const parts = promptText.split(/\s+/);
-        const requested = parts[1];
-        if (!requested) {
-          const text = `Current mode: ${session.mode}`;
-          const messageId = nextMessageId(session);
-          await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
-          session.history.push({ role: "assistant", content: text, reasoning_content: "" });
-          await persist(session);
-          return { stopReason: "end_turn" };
-        }
-        if (!AVAILABLE_MODES.some((m) => m.id === requested)) {
-          const text = `Unknown mode "${requested}". Available: ${AVAILABLE_MODES.map((m) => m.id).join(", ")}.`;
-          const messageId = nextMessageId(session);
-          await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
-          session.history.push({ role: "assistant", content: text, reasoning_content: "" });
-          await persist(session);
-          return { stopReason: "end_turn" };
-        }
-        session.mode = requested;
-        await persist(session);
-        const notifyMode = createNotifier(ctx.client, session.id);
-        await notifyMode({ sessionUpdate: "current_mode_update", currentModeId: requested });
-        const text = `Switched mode to ${session.mode}.`;
-        const messageId = nextMessageId(session);
-        await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
-        session.history.push({ role: "assistant", content: text, reasoning_content: "" });
-        await persist(session);
-        return { stopReason: "end_turn" };
-      }
-
-      if (promptText === "/reasoning" || promptText.startsWith("/reasoning ")) {
-        await replayUserPrompt(ctx.params.prompt, notify, session);
-        const parts = promptText.split(/\s+/);
-        const requested = parts[1];
-        if (!requested) {
-          const text = `Current reasoning level: ${session.reasoningLevel}`;
-          const messageId = nextMessageId(session);
-          await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
-          session.history.push({ role: "assistant", content: text, reasoning_content: "" });
-          await persist(session);
-          return { stopReason: "end_turn" };
-        }
-        if (!REASONING_LEVELS.some((l) => l.value === requested)) {
-          const text = `Unknown reasoning level "${requested}". Available: ${REASONING_LEVELS.map((l) => l.value).join(", ")}.`;
-          const messageId = nextMessageId(session);
-          await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
-          session.history.push({ role: "assistant", content: text, reasoning_content: "" });
-          await persist(session);
-          return { stopReason: "end_turn" };
-        }
-        session.reasoningLevel = requested;
-        await persist(session);
-        const models = await modelCatalog();
-        const configOptions = [buildModelOption(models, session.model), buildReasoningOption(requested)];
-        const notifyConfig = createNotifier(ctx.client, session.id);
-        await notifyConfig({ sessionUpdate: "config_option_update", configOptions });
-        const text = `Switched reasoning level to ${session.reasoningLevel}.`;
-        const messageId = nextMessageId(session);
-        await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
-        session.history.push({ role: "assistant", content: text, reasoning_content: "" });
-        await persist(session);
-        return { stopReason: "end_turn" };
-      }
-
-      if (promptText === "/clear" || promptText === "/clear") {
-        await replayUserPrompt(ctx.params.prompt, notify, session);
-        session.history = [systemMessage(session.cwd)];
-        session.lastPromptTokens = 0;
-        session.costSoFar = 0;
-        session.title = undefined;
-        await persist(session);
-        const text = "Conversation cleared.";
-        const messageId = nextMessageId(session);
-        await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
-        session.history.push({ role: "assistant", content: text, reasoning_content: "" });
-        await persist(session);
-        return { stopReason: "end_turn" };
-      }
-
-      if (promptText === "/cost" || promptText === "/cost") {
-        await replayUserPrompt(ctx.params.prompt, notify, session);
-        const text = `Tokens (last request): ${session.lastPromptTokens}\nCost so far: ${session.costSoFar.toFixed(6)} USD`;
-        const messageId = nextMessageId(session);
-        await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
-        session.history.push({ role: "assistant", content: text, reasoning_content: "" });
-        await persist(session);
-        return { stopReason: "end_turn" };
-      }
-
-      if (promptText === "/tools" || promptText === "/tools") {
-        await replayUserPrompt(ctx.params.prompt, notify, session);
-        const builtin = [
-          "read_file", "write_file", "edit_file", "list_dir", "glob", "grep", "bash",
-        ];
-        const mcp = [...session.mcpTools.keys()];
-        const text = `Built-in tools: ${builtin.join(", ")}\nMCP tools: ${mcp.length ? mcp.join(", ") : "(none)"}`;
-        const messageId = nextMessageId(session);
-        await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
-        session.history.push({ role: "assistant", content: text, reasoning_content: "" });
-        await persist(session);
-        return { stopReason: "end_turn" };
-      }
-
-      if (promptText === "/compact" || promptText === "/compact") {
-        await replayUserPrompt(ctx.params.prompt, notify, session);
-        if (session.history.length < 3) {
-          const text = "Nothing to compact.";
-          const messageId = nextMessageId(session);
-          await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
-          session.history.push({ role: "assistant", content: text, reasoning_content: "" });
-          await persist(session);
-          return { stopReason: "end_turn" };
-        }
-        const summary = await summarizeTranscript({
-          history: session.history,
-          model: session.model,
-          llm: llm as import("../llm.js").PollinationsLlm,
+        const text = await matched.handler.run({
+          session,
+          notify,
+          arg: matched.arg,
           signal: abort.signal,
         });
-        if (summary) {
-          session.history = [session.history[0] as LlmMessage, { role: "assistant", content: summary }];
-          session.lastPromptTokens = 0;
-          await persist(session);
-        }
-        const text = summary ? "Compacted." : "Compaction failed.";
-        const messageId = nextMessageId(session);
-        await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
-        session.history.push({ role: "assistant", content: text, reasoning_content: "" });
-        await persist(session);
-        return { stopReason: "end_turn" };
-      }
-
-      if (promptText === "/sessions" || promptText === "/sessions") {
-        await replayUserPrompt(ctx.params.prompt, notify, session);
-        const { sessions: page } = await store.list({ cwd: session.cwd });
-        const text = page.length
-          ? page.map((s) => `${s.id}  ${s.updatedAt}`).join("\n")
-          : "No persisted sessions.";
-        const messageId = nextMessageId(session);
-        await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
-        session.history.push({ role: "assistant", content: text, reasoning_content: "" });
-        await persist(session);
-        return { stopReason: "end_turn" };
-      }
-
-      if (promptText === "/delete" || promptText === "/delete") {
-        await replayUserPrompt(ctx.params.prompt, notify, session);
-        await store.remove(session.id);
-        for (const connection of session.mcpConnections) connection.close();
-        session.deleted = true;
-        sessions.delete(session.id);
-        const text = "Session deleted.";
-        const messageId = nextMessageId(session);
-        await notify({ sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } });
-        return { stopReason: "end_turn" };
-      }
-
-      if (promptText === "/help" || promptText.startsWith("/help ")) {
-        await replayUserPrompt(ctx.params.prompt, notify, session);
-        const helpText =
-          "Available commands:\n" +
-          "- /help       Show this help message.\n" +
-          "- /status     Show session status.\n" +
-          "- /model      Show or switch the model.\n" +
-          "- /mode       Show or switch Build/Plan/Ask.\n" +
-          "- /reasoning  Show or set reasoning effort.\n" +
-          "- /clear      Clear the conversation.\n" +
-          "- /cost       Show token usage and cost.\n" +
-          "- /tools      List available tools.\n" +
-          "- /compact    Compact the context.\n" +
-          "- /sessions   List persisted sessions.\n" +
-          "- /delete     Delete this session.";
-        const messageId = nextMessageId(session);
-        await notify({
-          sessionUpdate: "agent_message_chunk",
-          messageId,
-          content: { type: "text", text: helpText },
-        });
-        session.history.push({ role: "assistant", content: helpText, reasoning_content: "" });
-        await persist(session);
+        await replyCommand(session, notify, text);
         return { stopReason: "end_turn" };
       }
 
@@ -933,6 +872,29 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
   /* ---------------------------------------------------------------- *
    * Turn internals
    * ---------------------------------------------------------------- */
+
+  /**
+   * Sends a slash command's reply as the assistant's turn.
+   *
+   * Every command answered the same way — one chunk to the client, the same
+   * text recorded in the transcript, the session written back — and copied
+   * that block eleven times. `/delete` has already removed the session, so
+   * the write is skipped rather than recreating the file it just dropped.
+   */
+  async function replyCommand(
+    session: SessionState,
+    notify: Notifier,
+    text: string,
+  ): Promise<void> {
+    const messageId = nextMessageId(session);
+    await notify({
+      sessionUpdate: "agent_message_chunk",
+      messageId,
+      content: { type: "text", text },
+    });
+    session.history.push({ role: "assistant", content: text, reasoning_content: "" });
+    if (!session.deleted) await persist(session);
+  }
 
   /**
    * Writes a session back to disk.
@@ -1362,6 +1324,30 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
  * ------------------------------------------------------------------ */
 
 type Notifier = ReturnType<typeof createNotifier>;
+
+/**
+ * Resolves a prompt against the slash-command table.
+ *
+ * Returns `null` for anything that is not a command the table knows, so an
+ * unknown `/foo` reaches the model as a plain message. A command that takes
+ * no argument only matches when nothing follows its name: `/clear now` is a
+ * message for the model, not a silent `/clear`.
+ */
+function matchSlashCommand(
+  text: string,
+  commands: Record<string, SlashCommand>,
+): { handler: SlashCommand; arg: string } | null {
+  if (!text.startsWith("/")) return null;
+
+  const [name, ...rest] = text.split(/\s+/);
+  const handler = commands[name?.slice(1) ?? ""];
+  if (!handler) return null;
+
+  const arg = rest.join(" ");
+  if (arg && !handler.takesArg) return null;
+
+  return { handler, arg };
+}
 
 function nextMessageId(session: SessionState): string {
   session.messageCounter += 1;
