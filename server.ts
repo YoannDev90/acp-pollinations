@@ -1409,7 +1409,7 @@ function toRequestError(error: unknown): RequestError {
   if (error instanceof LlmError) {
     return RequestError.internalError({ status: error.status }, error.message);
   }
-  if (error instanceof ToolError) return RequestError.internalError(undefined, error.message);
+  if (error instanceof ToolError) return RequestError.internalError(undefined, (error as ToolError).message);
   if (error instanceof Error && error.name === "AbortError") {
     return RequestError.requestCancelled();
   }

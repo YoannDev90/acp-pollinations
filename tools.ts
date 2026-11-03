@@ -7,6 +7,10 @@ import { methods } from "@agentclientprotocol/sdk";
 
 import type { LlmToolDefinition } from "./llm.js";
 import type { McpToolBinding } from "./mcp.js";
+import { ToolError } from "./errors.js";
+import { resolveInRoots } from "./paths.js";
+
+export { ToolError } from "./errors.js";
 
 export type ToolName =
   | "read_file"
@@ -67,13 +71,6 @@ export type ToolDefinition = Omit<LlmToolDefinition, "type"> & {
   /** Human-readable one-liner used as the ACP `tool_call` title. */
   title: (input: Record<string, unknown>) => string;
 };
-
-export class ToolError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ToolError";
-  }
-}
 
 const MAX_OUTPUT_CHARS = 20_000;
 const MAX_MATCHES = 50;
@@ -305,64 +302,6 @@ export async function executeTool(
 /* ------------------------------------------------------------------ *
  * Paths
  * ------------------------------------------------------------------ */
-
-/** Resolves a path and enforces the session's workspace root set. */
-async function resolveInRoots(path: unknown, ctx: ToolContext): Promise<string> {
-  if (typeof path !== "string" || path.trim() === "") {
-    throw new ToolError("A non-empty `path` is required");
-  }
-
-  const absolute = resolve(ctx.cwd, path);
-
-  // Lexical check first, so traversal via `..` is rejected before any I/O.
-  const lexicallyAllowed = ctx.roots.some((root) => {
-    const base = resolve(root);
-    return absolute === base || absolute.startsWith(base.endsWith(sep) ? base : base + sep);
-  });
-  if (!lexicallyAllowed) {
-    throw new ToolError(
-      `Refusing to access ${absolute}: it is outside the session workspace (${ctx.roots.join(", ")})`,
-    );
-  }
-
-  // Resolve symlinks so a link inside the workspace cannot point outside it.
-  // Missing targets are allowed (they may be created by write_file): their
-  // parent directory must still be inside the workspace.
-  const realRoots = await Promise.all(
-    ctx.roots.map(async (root) => {
-      try {
-        return await realpath(resolve(root));
-      } catch {
-        return resolve(root);
-      }
-    }),
-  );
-
-  let realAbsolute: string;
-  try {
-    realAbsolute = await realpath(absolute);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT") throw error;
-    try {
-      const parent = await realpath(dirname(absolute));
-      realAbsolute = resolve(parent, basename(absolute));
-    } catch {
-      return absolute;
-    }
-  }
-
-  const reallyAllowed = realRoots.some((root) => {
-    return realAbsolute === root || realAbsolute.startsWith(root.endsWith(sep) ? root : root + sep);
-  });
-  if (!reallyAllowed) {
-    throw new ToolError(
-      `Refusing to access ${absolute}: it resolves outside the session workspace (${ctx.roots.join(", ")})`,
-    );
-  }
-
-  return absolute;
-}
 
 function shortPath(path: unknown): string {
   return typeof path === "string" && path ? truncate(path, 60) : "<path>";
