@@ -1,4 +1,5 @@
 import { DEFAULT_MODEL } from "./config.js";
+import { isRetryableStatus, retryDelayMs, sleep } from "./net.js";
 import { createSseParser } from "./sse.js";
 
 export type LlmRole = "system" | "user" | "assistant" | "tool";
@@ -163,7 +164,7 @@ export class PollinationsLlm {
             reasoningEffort = undefined;
             continue;
           }
-          const retryable = isRetryableResponse(response.status, errorBody);
+          const retryable = isRetryableStatus(response.status, errorBody);
           if (retryable && attempt < maxAttempts - 1 && !params.signal?.aborted) {
             await sleep(retryDelayMs(response, attempt), params.signal);
             continue;
@@ -283,12 +284,6 @@ function normalizeUsage(raw: NonNullable<StreamPayload["usage"]>): LlmUsage {
   };
 }
 
-/** Whether a failed response is worth retrying (rate limits, transient 5xx). */
-function isRetryableResponse(status: number, body: string): boolean {
-  if (status === 429 || status === 502 || status === 503 || status === 504) return true;
-  return /too many requests|rate limit/i.test(body);
-}
-
 /**
  * Whether a failure says the model refused `reasoning_effort`.
  *
@@ -305,45 +300,13 @@ function rejectsReasoningEffort(status: number, body: string): boolean {
 /** Whether a thrown error is worth retrying. */
 function isRetryableError(error: unknown): boolean {
   if (error instanceof LlmError) {
-    if (error.status !== undefined) return isRetryableResponse(error.status, error.body ?? "");
+    if (error.status !== undefined) return isRetryableStatus(error.status, error.body ?? "");
     return /too many requests|rate limit|ECONN|ETIMEDOUT|fetch failed/i.test(error.message);
   }
   if (error instanceof Error) {
     return /ECONN|ETIMEDOUT|fetch failed/i.test(error.message);
   }
   return false;
-}
-
-/** Delay before the next retry attempt. */
-function retryDelayMs(response: Response | undefined, attempt: number): number {
-  const retryAfter = response?.headers?.get?.("retry-after");
-  if (retryAfter) {
-    const seconds = Number(retryAfter);
-    if (Number.isFinite(seconds)) return Math.min(Math.max(0, seconds) * 1000, 30_000);
-    const date = Date.parse(retryAfter);
-    if (!Number.isNaN(date)) return Math.min(Math.max(0, date - Date.now()), 30_000);
-  }
-  return Math.min(1000 * 2 ** attempt, 8000);
-}
-
-/** Resolves after `ms`, or rejects early when `signal` aborts. */
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolvePromise, rejectPromise) => {
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolvePromise();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      rejectPromise(new Error("aborted"));
-    };
-    if (signal?.aborted) {
-      clearTimeout(timer);
-      rejectPromise(new Error("aborted"));
-      return;
-    }
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
 }
 
 /** Turns an error response body into a human-readable suffix. */

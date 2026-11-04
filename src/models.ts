@@ -1,5 +1,7 @@
 import type { SessionConfigOption, SessionConfigSelectOption } from "@agentclientprotocol/sdk";
 
+import { isRetryableStatus, retryDelayMs, sleep } from "./net.js";
+
 /**
  * Pollinations model catalogue: fetch, classify, and render the model picker.
  *
@@ -180,36 +182,85 @@ export type FetchModelCatalogOptions = {
  *
  * Anything else — image, audio, realtime, embeddings, tool-less chat — would
  * break the agent's tool loop, so it is dropped rather than offered.
+ *
+ * The catalogue is what `session/new` advertises, so one transient failure
+ * must not blank the picker: transient statuses and network errors are retried
+ * with the same backoff the chat stream uses, while a permanent answer (a
+ * wrong URL, a revoked key) is reported at once — retrying it would only
+ * delay the offline fallback the caller takes anyway.
  */
 export async function fetchModelCatalog(
   options: FetchModelCatalogOptions,
 ): Promise<CatalogModel[]> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const baseUrl = options.baseUrl.replace(/\/+$/, "");
+  const url = `${baseUrl}/v1/models`;
+  const maxAttempts = 3;
 
-  const controller = new AbortController();
-  const onAbort = () => controller.abort();
-  // A signal aborted *before* this call never fires its listener again.
-  if (options.signal?.aborted) controller.abort();
-  options.signal?.addEventListener("abort", onAbort, { once: true });
-  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 10_000);
+  /** One attempt, with a timeout of its own: a retry must not inherit a burnt budget. */
+  async function requestOnce(): Promise<unknown> {
+    const controller = new AbortController();
+    const onAbort = () => controller.abort();
+    // A signal aborted *before* this call never fires its listener again.
+    if (options.signal?.aborted) controller.abort();
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+    const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 10_000);
 
-  try {
-    const response = await fetchImpl(`${baseUrl}/v1/models`, {
-      method: "GET",
-      headers: { Accept: "application/json" },
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      throw new Error(`GET /v1/models responded with ${response.status} ${response.statusText}`);
+    try {
+      const response = await fetchImpl(url, {
+        method: "GET",
+        headers: { Accept: "application/json" },
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        throw new CatalogRequestError(response.status, response.statusText);
+      }
+      const payload: unknown = await response.json();
+      return payload;
+    } finally {
+      clearTimeout(timeout);
+      options.signal?.removeEventListener("abort", onAbort);
     }
-
-    return parseModelCatalog(await response.json());
-  } finally {
-    clearTimeout(timeout);
-    options.signal?.removeEventListener("abort", onAbort);
   }
+
+  let lastError: unknown;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    let payload: unknown;
+    try {
+      payload = await requestOnce();
+    } catch (error) {
+      lastError = error;
+      // The caller stopped waiting: their abort is not a failure to retry.
+      const gaveUp = options.signal?.aborted ?? false;
+      if (gaveUp || attempt === maxAttempts - 1 || !isRetryableCatalogError(error)) throw error;
+      await sleep(retryDelayMs(undefined, attempt), options.signal);
+      continue;
+    }
+    return parseModelCatalog(payload);
+  }
+
+  throw lastError;
+}
+
+/** A catalogue response the server refused, carrying the status that decided. */
+class CatalogRequestError extends Error {
+  readonly status: number;
+
+  constructor(status: number, statusText: string) {
+    super(`GET /v1/models responded with ${status} ${statusText}`);
+    this.status = status;
+  }
+}
+
+/**
+ * Whether a later attempt could plausibly succeed.
+ *
+ * Everything that is not an HTTP refusal — a reset socket, a timeout, a body
+ * cut short mid-JSON — is a transport problem, and transport problems are
+ * exactly what the next attempt is for.
+ */
+function isRetryableCatalogError(error: unknown): boolean {
+  return !(error instanceof CatalogRequestError) || isRetryableStatus(error.status, "");
 }
 
 /** Turns a `/v1/models` payload into sorted, filter-qualified models. */

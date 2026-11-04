@@ -266,13 +266,53 @@ describe("fetchModelCatalog", () => {
 
   it("reports a non-2xx catalogue instead of silently returning nothing", async () => {
     const failing = await startFakeLlmServer([], {
-      failModelsWith: { status: 503, body: "down" },
+      // 404 is permanent: retrying a path that does not exist would only
+      // delay the error the picker has to hear about.
+      failModelsWith: { status: 404, body: "not here" },
     });
 
     try {
-      await expect(fetchModelCatalog({ baseUrl: failing.baseUrl })).rejects.toThrow(/503/);
+      await expect(fetchModelCatalog({ baseUrl: failing.baseUrl })).rejects.toThrow(/404/);
+      expect(failing.modelRequests).toBe(1);
     } finally {
       await failing.close();
+    }
+  });
+
+  it("retries a transient catalogue failure and recovers", async () => {
+    const flaky = await startFakeLlmServer([], {
+      failModelsWith: { status: 503, body: "starting", times: 1 },
+    });
+
+    try {
+      const models = await fetchModelCatalog({ baseUrl: flaky.baseUrl });
+
+      expect(flaky.modelRequests).toBe(2);
+      expect(models.map((entry) => entry.id)).toContain("official/quest-a");
+    } finally {
+      await flaky.close();
+    }
+  });
+
+  it("retries a connection error the same way", async () => {
+    const server = await startFakeLlmServer([]);
+    let calls = 0;
+    const flakyFetch: typeof fetch = (input, init) => {
+      calls += 1;
+      if (calls === 1) return Promise.reject(new TypeError("fetch failed"));
+      return fetch(input, init);
+    };
+
+    try {
+      const models = await fetchModelCatalog({
+        baseUrl: server.baseUrl,
+        fetchImpl: flakyFetch,
+      });
+
+      expect(calls).toBe(2);
+      expect(models.map((entry) => entry.id)).toContain("official/quest-a");
+    } finally {
+      await server.close();
     }
   });
 

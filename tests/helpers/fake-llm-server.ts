@@ -34,6 +34,8 @@ export type FakeLlmServer = {
   requests: RecordedRequest[];
   /** Number of chat-completion calls served so far. */
   readonly callCount: number;
+  /** Number of `GET /v1/models` requests served so far. */
+  readonly modelRequests: number;
   close: () => Promise<void>;
 };
 
@@ -47,8 +49,12 @@ export type FakeLlmOptions = {
   failOnceWith?: { status: number; body: string };
   /** Raw body served from `GET /v1/models`. Defaults to a small catalogue. */
   modelsPayload?: unknown;
-  /** When set, `GET /v1/models` fails instead, to exercise the offline path. */
-  failModelsWith?: { status: number; body: string };
+  /**
+   * When set, `GET /v1/models` fails instead, to exercise the offline path.
+   * `times` limits the failure to the first N requests, so a client that
+   * retries can be seen recovering.
+   */
+  failModelsWith?: { status: number; body: string; times?: number };
   /**
    * Picks the turn from the request itself, overriding `turns`. Needed when one
    * server has to answer prompts it cannot tell apart in advance: the
@@ -149,16 +155,19 @@ export async function startFakeLlmServer(
   const requests: RecordedRequest[] = [];
   let cursor = 0;
   let failedOnce = false;
+  let modelRequests = 0;
 
   const server = createServer((req, res) => {
     // A scripted outage of the catalogue endpoint, independent of `failWith`,
     // which only governs chat completions below.
     if (req.method === "GET" && req.url?.includes("/v1/models")) {
-      if (options.failModelsWith) {
-        res.writeHead(options.failModelsWith.status, {
+      modelRequests += 1;
+      const failure = options.failModelsWith;
+      if (failure && (failure.times === undefined || modelRequests <= failure.times)) {
+        res.writeHead(failure.status, {
           "Content-Type": "application/json",
         });
-        res.end(options.failModelsWith.body);
+        res.end(failure.body);
         return;
       }
       res.writeHead(200, { "Content-Type": "application/json" });
@@ -240,6 +249,9 @@ export async function startFakeLlmServer(
     requests,
     get callCount() {
       return cursor;
+    },
+    get modelRequests() {
+      return modelRequests;
     },
     close: () =>
       new Promise<void>((resolve) => {

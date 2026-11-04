@@ -441,7 +441,9 @@ describe("model picker", () => {
 
   it("falls back to the offline list when the catalogue cannot be read", async () => {
     const server = await startFakeLlmServer([{ text: "hi" }], {
-      failModelsWith: { status: 503, body: "down" },
+      // 404 is permanent, so the picker falls back at once instead of the
+      // test sitting through the retry backoff a transient status would take.
+      failModelsWith: { status: 404, body: "no catalogue" },
     });
     servers.push(server);
 
