@@ -12,6 +12,13 @@ import { resolveInRoots } from "../paths.js";
 
 export { ToolError } from "../errors.js";
 
+/**
+ * The tools this agent ships.
+ *
+ * A closed set on purpose: each one is implemented in this file and confined
+ * to the session's roots, and the names are wire-visible — renaming one is a
+ * breaking change for clients that pattern-match on them.
+ */
 export type ToolName =
   | "read_file"
   | "write_file"
@@ -21,8 +28,16 @@ export type ToolName =
   | "grep"
   | "bash";
 
+/** A place in a file the client can open, to follow what the agent did. */
 export type ToolLocation = { path: string; line?: number };
 
+/**
+ * What one tool call produced, in the shape the model reads back.
+ *
+ * Tools never throw across this boundary: a refusal, a denied permission, and
+ * a genuine failure all arrive as `output` with `isError` set, so the model
+ * gets a chance to correct itself instead of losing the turn.
+ */
 export type ToolExecutionResult = {
   /** Text handed back to the model as the tool result. */
   output: string;
@@ -35,6 +50,14 @@ export type ToolExecutionResult = {
   terminalId?: string;
 };
 
+/**
+ * Everything a tool call needs to run: where it may touch, what the client
+ * can do, and whether the user has agreed yet.
+ *
+ * The `roots` and `approve` fields are the two safety rails — the first
+ * confines the filesystem, the second keeps a mutating call from happening
+ * without the client saying so.
+ */
 export type ToolContext = {
   sessionId: string;
   /** Session working directory; also the default root for relative paths. */

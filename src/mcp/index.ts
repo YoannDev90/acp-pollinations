@@ -39,6 +39,13 @@ const DEFAULT_MCP_TIMEOUTS: McpTimeouts = {
 
 export type McpEnvVar = { name: string; value: string };
 
+/**
+ * One entry of a server's `mcpServers` configuration.
+ *
+ * Everything is optional because the shape is validated, not trusted: a
+ * `command` picks stdio, a `url` picks HTTP or SSE, and anything that fits
+ * neither is dropped by {@link normalizeMcpServer} rather than guessed at.
+ */
 export type McpServerConfig = {
   type?: "stdio" | "http" | "sse";
   name?: string;
@@ -49,6 +56,13 @@ export type McpServerConfig = {
   headers?: Record<string, string> | Array<{ name: string; value: string }>;
 };
 
+/**
+ * A tool a server advertises, kept close to the MCP wire shape.
+ *
+ * `annotations.readOnlyHint` is the one hint the agent acts on: a tool is
+ * treated as read-only only when the server says so explicitly, because a
+ * mutating call that slipped through unannounced is the worse mistake.
+ */
 export type McpTool = {
   name: string;
   description?: string;
@@ -61,6 +75,11 @@ export type McpTool = {
   };
 };
 
+/**
+ * One MCP tool wired into the agent's own tool layer: same `kind`,
+ * `mutating`, and `title` contract as a built-in, so the prompt loop and the
+ * permission flow cannot tell the two apart.
+ */
 export type McpToolBinding = {
   name: string;
   kind: ToolKind;
@@ -69,6 +88,13 @@ export type McpToolBinding = {
   call: (input: Record<string, unknown>) => Promise<ToolExecutionResult>;
 };
 
+/**
+ * A live MCP server: the tools it advertised, their bindings, and the way to
+ * let go of it.
+ *
+ * `close` is idempotent and called on shutdown; a connection that is never
+ * closed leaves a child process behind for the editor to reap.
+ */
 export type McpConnection = {
   name: string;
   tools: McpTool[];
@@ -99,6 +125,13 @@ function sanitizeName(value: string): string {
   return value.replace(/[^a-zA-Z0-9_]/g, "_");
 }
 
+/**
+ * Spawns one stdio MCP server and negotiates `initialize` with it.
+ *
+ * Throws on failure — the caller ({@link connectMcpServers}) is the layer
+ * that decides a missing server is survivable and logs instead of failing
+ * the session.
+ */
 export async function connectMcpServer(config: McpServerConfig): Promise<McpConnection> {
   const serverName = config.name?.trim() || config.command;
   const child = spawn(config.command as string, config.args ?? [], {
@@ -666,6 +699,13 @@ function buildMcpBindings(
   return { tools, bindings, toolDefinitions };
 }
 
+/**
+ * Whether a config entry describes a stdio server: a `command` to spawn,
+ * with `type` either absent or explicitly `stdio`.
+ *
+ * The `type` check runs first so `{ type: "http", command: "..." }` is not
+ * silently spawned as a child process.
+ */
 export function isStdioMcpServer(value: unknown): value is McpServerConfig {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
@@ -673,6 +713,7 @@ export function isStdioMcpServer(value: unknown): value is McpServerConfig {
   return typeof record.command === "string" && record.command.length > 0;
 }
 
+/** Whether a config entry describes an HTTP or SSE server (a `url`, no spawn). */
 export function isHttpMcpServer(value: unknown): value is McpServerConfig {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
@@ -683,6 +724,13 @@ export function isHttpMcpServer(value: unknown): value is McpServerConfig {
   return record.type === "http" || record.type === "sse" || record.type === undefined;
 }
 
+/**
+ * Turns an unvalidated `mcpServers` entry into a config, or returns `null`.
+ *
+ * Client-supplied JSON is never assumed to match the schema: a missing
+ * `command`, a `command` that is not a string, or an entry that fits neither
+ * transport is dropped with `null`, which the caller logs and skips.
+ */
 export function normalizeMcpServer(value: unknown): McpServerConfig | null {
   if (isStdioMcpServer(value)) {
     const record = value as Record<string, unknown>;
@@ -705,6 +753,14 @@ export function normalizeMcpServer(value: unknown): McpServerConfig | null {
   return null;
 }
 
+/**
+ * Connects every configured server, skipping the ones that fail.
+ *
+ * Degradation is the whole point: an MCP server that is not installed, or an
+ * editor that launched the agent with a `PATH` too short to find it, must
+ * leave a session with fewer tools rather than no session. Each failure is
+ * logged with the target so the operator knows which entry to fix.
+ */
 export async function connectMcpServers(servers: unknown[]): Promise<McpConnection[]> {
   const connections: McpConnection[] = [];
   for (const server of servers) {
@@ -731,6 +787,15 @@ export async function connectMcpServers(servers: unknown[]): Promise<McpConnecti
   return connections;
 }
 
+/**
+ * Folds every connection's tools into one map and one definition list.
+ *
+ * Names are the collision surface: the model sees a flat namespace where a
+ * server's `read_file` would shadow the built-in, and two servers can ship
+ * the same name. Anything already taken is reissued under a
+ * `server__tool` prefix, so no tool ever becomes unreachable — a tool the
+ * model cannot call is worse than an ugly name.
+ */
 export function mergeMcpBindings(connections: McpConnection[]): {
   bindings: Map<string, McpToolBinding>;
   definitions: LlmToolDefinition[];

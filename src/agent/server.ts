@@ -44,8 +44,16 @@ import {
   mergeMcpBindings,
 } from "../mcp/index.js";
 
+/** ACP machine name for the agent, stable across releases: clients key on it. */
 export const AGENT_NAME = "pollinations";
+/** Human-readable title shown in client UIs and in every log line. */
 export const AGENT_TITLE = "Pollinations";
+/**
+ * Version reported in `initialize` and the startup banner.
+ *
+ * Bumped together with `version` in `package.json` — see the versioning
+ * policy in CONTRIBUTING.md; nothing checks the pair automatically.
+ */
 export const AGENT_VERSION = "1.0.0";
 
 export { promptToText } from "../messages.js";
@@ -97,6 +105,13 @@ type SlashCommand = {
   run: (context: SlashCommandContext) => string | Promise<string>;
 };
 
+/**
+ * What {@link createPollinationsAgent} needs to run.
+ *
+ * Only `config` is required; the rest exist so tests can drive the agent
+ * against a fake endpoint without touching the network, and so the catalogue
+ * cache can be shortened to nothing.
+ */
 export type CreatePollinationsAgentOptions = {
   config: AgentConfig;
   /** Injected LLM, for tests. Defaults to a real Pollinations client. */

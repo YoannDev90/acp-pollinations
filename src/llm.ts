@@ -2,6 +2,13 @@ import { DEFAULT_MODEL } from "./config.js";
 import { isRetryableStatus, retryDelayMs, sleep } from "./net.js";
 import { createSseParser } from "./sse.js";
 
+/**
+ * Who is speaking in a message.
+ *
+ * `tool` exists only so a tool result can be paired with the `tool_calls` it
+ * answers — the pairing is what lets the model attribute a result to the call
+ * that produced it.
+ */
 export type LlmRole = "system" | "user" | "assistant" | "tool";
 
 /** A tool call requested by the model, in OpenAI Chat Completions shape. */
@@ -37,6 +44,13 @@ export type LlmToolDefinition = {
   };
 };
 
+/**
+ * Token counts for one request.
+ *
+ * The provider does not always send a total, so `totalTokens` is summed from
+ * the two parts rather than trusted to arrive: `usage_update` reports it to
+ * the client either way.
+ */
 export type LlmUsage = {
   promptTokens: number;
   completionTokens: number;
@@ -54,6 +68,13 @@ export type LlmChunk = {
   usage?: LlmUsage;
 };
 
+/**
+ * One call to `POST /v1/chat/completions`.
+ *
+ * `model` and `reasoningEffort` are per-request on purpose: ACP lets the
+ * client switch both mid-session, and a client held in one constructor would
+ * make the picker and the reasoning selector decorative.
+ */
 export type LlmChatParams = {
   messages: LlmMessage[];
   tools?: LlmToolDefinition[];
@@ -72,6 +93,7 @@ export type LlmChatParams = {
   signal?: AbortSignal;
 };
 
+/** Construction options for {@link PollinationsLlm}. */
 export type PollinationsLlmOptions = {
   apiKey: string;
   baseUrl?: string;
@@ -82,6 +104,13 @@ export type PollinationsLlmOptions = {
   timeoutMs?: number;
 };
 
+/**
+ * A chat-completion request that failed after its retries ran out.
+ *
+ * The status and body ride along because everything downstream decides with
+ * them: the retry loop asks whether the status is worth another attempt, and
+ * the prompt handler maps the failure to a JSON-RPC error carrying both.
+ */
 export class LlmError extends Error {
   constructor(
     message: string,

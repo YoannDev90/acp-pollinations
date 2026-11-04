@@ -41,6 +41,15 @@ export type PersistedSession = {
   history: LlmMessage[];
 };
 
+/**
+ * The persistence boundary: one JSON file per session, or no files at all.
+ *
+ * Readers degrade instead of throwing — a corrupt file reads as `null`, a
+ * failed list reads as empty — because a session that cannot be read is
+ * indistinguishable from one that never existed, and neither should fail a
+ * request. `save` is the exception: it propagates a write failure so the
+ * caller can report the lost transcript instead of pretending it landed.
+ */
 export type SessionStore = {
   /** Reads a record, or `null` when it is absent, corrupt, or unreadable. */
   load(id: string): Promise<PersistedSession | null>;
@@ -57,6 +66,7 @@ export type SessionStore = {
   list(options?: ListSessionsOptions): Promise<ListSessionsResult>;
 };
 
+/** Filters for {@link SessionStore.list}; all optional, all narrowing. */
 export type ListSessionsOptions = {
   /** Only sessions whose workspace is this path, or one of its roots. */
   cwd?: string;
@@ -66,11 +76,27 @@ export type ListSessionsOptions = {
   limit?: number;
 };
 
+/**
+ * A stored session with its write time, which is what orders the listing.
+ *
+ * The timestamp comes from the file rather than the record: a session is
+ * re-saved on every turn, so mtime tracks the last activity without another
+ * field to keep in sync.
+ */
 export type StoredSession = PersistedSession & {
   /** ISO timestamp of the last write, which is what orders the listing. */
   updatedAt: string;
 };
 
+/**
+ * One page of `session/list`.
+ *
+ * The cursor is opaque to the client even though it currently encodes an
+ * offset: every call re-reads the directory and re-sorts by mtime, so a
+ * position computed by the client could drift from the one the store would
+ * hand back. Clients pass the token along; the encoding stays the store's to
+ * change.
+ */
 export type ListSessionsResult = {
   sessions: StoredSession[];
   /** Present only when further pages remain. */

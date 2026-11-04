@@ -46,18 +46,26 @@ export type AgentConfig = {
   permissionMode: "ask" | "allow";
 };
 
+/**
+ * Overrides for `resolveConfig` and `resolveApiKey`.
+ *
+ * Both default to the real process environment and the real home directory;
+ * tests pass `env` so a key or a home path never has to be present on the
+ * machine running them.
+ */
 export type ResolveConfigOptions = {
+  /** Environment to read. Defaults to `process.env`. */
   env?: NodeJS.ProcessEnv;
   /** Explicit credentials file, defaults to `$POLLINATIONS_HOME/credentials.json`. */
   credentialsFile?: string;
 };
 
 /**
- * Reads a Pollinations API key.
+ * Reads the first config file it finds under `home`, or an empty record.
  *
- * Order: `POLLINATIONS_API_KEY`, then the config file, then the `polli auth
- * login` credentials file. Returns an empty string when no source yields a
- * key, so callers can decide how to report the problem.
+ * Several spellings exist because released setups use all of them, and a
+ * missing file is not an error: the environment and the credentials file are
+ * still allowed to answer.
  */
 async function readConfigFile(home: string): Promise<Record<string, unknown>> {
   for (const name of ["config-acp", "config-acp.json", "config.json"]) {
@@ -73,6 +81,14 @@ async function readConfigFile(home: string): Promise<Record<string, unknown>> {
   return {};
 }
 
+/**
+ * Reads a Pollinations API key.
+ *
+ * Order: `POLLINATIONS_API_KEY`, then the config file, then the `polli auth
+ * login` credentials file. Returns an empty string when no source yields a
+ * key, so callers can decide how to report the problem — the agent starts
+ * without one and fails at `session/new`, rather than dying at boot.
+ */
 export async function resolveApiKey(
   options: ResolveConfigOptions = {},
 ): Promise<string> {

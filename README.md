@@ -220,7 +220,19 @@ import { createPollinationsAgent, resolveConfig } from "acp-pollinations";
 
 const config = await resolveConfig();
 const agent = createPollinationsAgent({ config });
-// agent.connect(ndJsonStream(output, input))
+
+// Speaks ACP over any SDK stream — stdio in production, an in-process
+// stream in tests. Returns the SDK connection, so `connectWith(...)` and
+// the rest of its surface are available unchanged.
+const connection = agent.connect(ndJsonStream(output, input));
+
+// Before the process leaves: abort in-flight turns, close MCP children,
+// write every transcript back. Memoised, so calling it twice is safe.
+// `bin/pollinations-acp-server.ts` wires this to SIGINT, SIGTERM, and
+// stdin EOF; a library consumer owns that wiring instead.
+process.once("SIGTERM", () => {
+  void agent.shutdown().then(() => connection.close());
+});
 ```
 
 ## Troubleshooting

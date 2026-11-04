@@ -31,6 +31,13 @@ export const MODEL_CATALOG_TTL_MS = 5 * 60_000;
 /** Where the model is published: Pollinations' own, or a community author's. */
 export type Origin = "official" | "community";
 
+/**
+ * How the model is billed: a paid model, a sponsored quest, or a free one.
+ *
+ * The catalogue omits prices often enough that "unpriced" is a normal state
+ * of the input, not a parsing failure — {@link classifyTier} turns absent
+ * amounts into `quest` rather than guessing `free`.
+ */
 export type PricingTier = "paid" | "quest" | "free";
 
 /**
@@ -166,6 +173,13 @@ export const FALLBACK_MODELS: readonly CatalogModel[] = [
   },
 ];
 
+/**
+ * Options for {@link fetchModelCatalog}.
+ *
+ * `fetchImpl` and `signal` are the seams that keep this testable and
+ * cancellable: the agent passes its own abort so a session torn down mid-read
+ * does not leave a request running.
+ */
 export type FetchModelCatalogOptions = {
   /** API base URL, without a trailing slash. */
   baseUrl: string;
