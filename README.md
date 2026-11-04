@@ -187,6 +187,13 @@ const agent = createPollinationsAgent({ config });
 // agent.connect(ndJsonStream(output, input))
 ```
 
+## Security
+
+The trust model — who controls the process, where the API key goes, what the
+workspace boundary enforces, and what lands on disk — is written down in
+[SECURITY.md](SECURITY.md), together with how to report a vulnerability
+privately.
+
 ## Licence
 
 [MIT](LICENSE) © YoannDev90.

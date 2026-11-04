@@ -93,6 +93,10 @@ Open an issue with:
 - The agent's stderr, which carries the startup banner and every diagnostic.
   The JSON-RPC stream on stdout is deliberately clean and rarely informative.
 
+Security issues are the one thing not to open publicly: report them through
+[GitHub Security Advisories](https://github.com/YoannDev90/acp-pollinations/security/advisories/new)
+instead, as described in `SECURITY.md`.
+
 ## Licence
 
 By contributing you agree your changes are licensed under the MIT License, the
