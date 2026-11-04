@@ -164,6 +164,41 @@ turn first summarises the transcript, then keeps the system message plus the
 summary. The size comes from the provider's own usage report. Clients that
 advertise `session.compaction` receive `in_progress` / `completed` updates.
 
+## Architecture
+
+One process, no daemon: the client spawns the binary and speaks ACP over stdio,
+and behind the request handlers everything is a module with one job.
+
+```
+src/
+├── agent/server.ts        request handlers, prompt loop, permissions, shutdown
+├── agent/session-state.ts the in-memory shape of one session
+├── llm.ts                 chat-completion stream, tool-call deltas, retries
+├── net.ts                 backoff and sleep, shared with the catalogue
+├── tools/index.ts         tool schemas and execution
+├── paths.ts               workspace root confinement (lexical, then realpath)
+├── mcp/index.ts           stdio / HTTP / SSE MCP clients
+├── sessions/index.ts      one JSON file per session, written atomically
+├── models.ts              /v1/models catalogue and the picker option
+├── compaction.ts          transcript summarisation
+├── messages.ts            prompt-to-text, system prompt, history rebasing
+├── connection.ts          per-connection identity and update delivery
+├── errors.ts              the `ToolError` the tools throw
+├── config.ts, logger.ts   env + file configuration, stderr mirror
+└── index.ts               the public library surface
+```
+
+A prompt turn runs in `agent/server.ts`: replay the user message, compact first
+if the threshold was reached, stream `agent_message_chunk` and
+`agent_thought_chunk` updates while `llm.ts` reads the SSE stream, execute
+requested tools through the permission flow, then persist the transcript.
+Everything the client sees rides the same connection the prompt arrived on.
+
+State is deliberately small. Sessions live in memory and are written to
+`$POLLINATIONS_HOME/sessions` after every turn and once more on shutdown; the
+model catalogue is cached for five minutes; diagnostics are appended under
+`$POLLINATIONS_HOME/logs`. Nothing else survives the process.
+
 ## Development
 
 ```sh
@@ -187,6 +222,45 @@ const config = await resolveConfig();
 const agent = createPollinationsAgent({ config });
 // agent.connect(ndJsonStream(output, input))
 ```
+
+## Troubleshooting
+
+**The agent exits the moment my editor starts it.** Run it by hand —
+`node dist/bin/pollinations-acp-server.js` — and read stderr: the startup
+banner comes first, then whatever went wrong. The usual causes are a missing
+build (`npm run build`) and Node older than 22. Stdout carries the JSON-RPC
+stream and nothing else, so a silent terminal means the process never
+started.
+
+**`session/new` fails with `-32000`.** No key reached the agent. See
+[Authentication](#authentication): `POLLINATIONS_API_KEY`, the config file, or
+`polli auth login`.
+
+**The model dropdown is empty, or only offers the fallback list.** The
+catalogue could not be read. It is retried three times with backoff, and the
+log then says `model catalogue unavailable (...); offering the offline list`.
+That usually means no network from the editor's environment, a proxy in the
+way, or a wrong `POLLINATIONS_BASE_URL`. `npm run models` prints exactly what
+the live endpoint returns.
+
+**Tools run without asking, or never ask.** `ACP_PERMISSION_MODE` (or
+`permission_mode` in the config file) is set to `allow`. Plan mode also
+disables mutations, so a tool that declines to act is often a mode question —
+`/status` shows which one is active.
+
+**My MCP server's tools are missing.** The connection failed and the session
+carried on without them; stderr says which (`MCP connection failed …`,
+`MCP: failed to connect to …`). The usual cause is an editor launching the
+agent with a minimal `PATH`, so the server's `command` is not on it.
+
+**An edit is refused as "outside the session workspace".** File tools are
+confined to the session's root set, symlinks included. The roots come from
+the client: the directory it passed to `session/new`, plus any
+`additionalDirectories` it offered.
+
+**Something happened and I want the details.** stderr is mirrored to
+`$POLLINATIONS_HOME/logs/pollinations-acp-server.log`, one timestamped line
+per message, rotated at 2 MiB with three kept generations.
 
 ## Security
 
