@@ -26,6 +26,12 @@ Pollinations endpoint in `tests/helpers/fake-llm-server.ts`, which scripts
 turns and records what the agent sent. Add a scripted turn there rather than
 calling a real API.
 
+CI runs those three on Node 22 and 24, and adds two checks on Node 22 only:
+`npm run coverage`, whose thresholds live in `vitest.config.ts` and cover
+`src/` alone (the entry point runs as a separate process, so its coverage
+never reaches the report), and `npm audit --audit-level=high`. Raise the
+thresholds together with the tests that justify the new floor.
+
 `npm run models` is the one command that does hit the network — it prints what
 the picker would offer against the live catalogue. It is a diagnostic, not part
 of the test run.

@@ -168,7 +168,9 @@ advertise `session.compaction` receive `in_progress` / `completed` updates.
 
 ```sh
 npm run typecheck   # tsc --noEmit
+npm run lint        # eslint .
 npm test            # vitest run
+npm run coverage    # tests with coverage thresholds
 npm run watch       # tsc --watch
 npm run tck         # conformance suite
 ```

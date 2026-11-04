@@ -36,11 +36,51 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Lint
+        run: npm run lint
+
       # `npm test` builds first (see the `pretest` script), because the e2e
       # suite spawns the built binary rather than the sources.
       - name: Test
         run: npm test
 
+      # Coverage runs on one node version only: the numbers do not depend on
+      # the runtime, and a second run would only double the report.
+      - name: Coverage
+        if: matrix.node == 22
+        run: npm run coverage
+
+      # High and critical advisories fail the build. A registry hiccup fails
+      # this step too, which is the better failure mode than skipping it.
+      - name: Audit dependencies
+        if: matrix.node == 22
+        run: npm audit --audit-level=high
+
       # The entry point must stay executable, or a published install cannot run it.
       - name: Check the entry point is executable
         run: test -x dist/bin/pollinations-acp-server.js
+
+  # Separate from `verify`: a conformance failure should not hide behind a
+  # matrix result, and the suite needs a network round trip the unit tests do
+  # not. It clones acp-tck and points the agent at a local fake endpoint, so
+  # it needs no API key and bills nothing.
+  tck:
+    name: ACP conformance
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Conformance
+        run: npm run tck
