@@ -67,6 +67,18 @@ function agentText(updates: unknown[]): string {
     .join("");
 }
 
+/**
+ * Renders a message's content for an assertion.
+ *
+ * The fake endpoint stores whatever the test put in it, so `content` is
+ * `unknown`: stringifying blindly would assert against `[object Object]` and
+ * pass for the wrong reason.
+ */
+function contentText(content: unknown): string {
+  if (typeof content === "string") return content;
+  return content === undefined || content === null ? "" : JSON.stringify(content);
+}
+
 describe("createPollinationsAgent", () => {
   it("completes a text-only turn and streams the answer", async () => {
     await withAgent([{ text: "hello from the model" }], {}, async ({ cwd, server, harness }) => {
@@ -463,7 +475,8 @@ describe("model picker", () => {
   it("reads the catalogue once and reuses it for later sessions", async () => {
     let reads = 0;
     const countingFetch: typeof fetch = (input, init) => {
-      if (String(input).includes("/v1/models")) reads += 1;
+      const url = input instanceof URL ? input.href : typeof input === "string" ? input : input.url;
+      if (url.includes("/v1/models")) reads += 1;
       return fetch(input, init);
     };
 
@@ -598,7 +611,7 @@ describe("session/load", () => {
         });
 
         const messages = server.requests[before]?.messages ?? [];
-        const texts = messages.map((message) => String(message.content ?? ""));
+        const texts = messages.map((message) => contentText(message.content));
         // The transcript from before the restart is what the model now sees.
         expect(texts).toContain("the opening line");
         expect(texts).toContain("continue where we left off");
@@ -783,7 +796,7 @@ describe("compaction", () => {
 
       // The real turn now runs against the summary, not the old transcript.
       const turn = server.requests[2]?.messages ?? [];
-      const texts = turn.map((message) => String(message.content ?? ""));
+      const texts = turn.map((message) => contentText(message.content));
       expect(turn).toHaveLength(3); // system, summary, new prompt
       expect(texts).toContain("Summary of the work so far.");
       expect(texts.some((text) => text.includes("the first question"))).toBe(false);
@@ -797,7 +810,7 @@ describe("compaction", () => {
       // Two requests, one per turn: no summarisation was made.
       expect(server.requests).toHaveLength(2);
       const texts = (server.requests[1]?.messages ?? []).map((message) =>
-        String(message.content ?? ""),
+        contentText(message.content),
       );
       expect(texts).toContain("the first question");
     });

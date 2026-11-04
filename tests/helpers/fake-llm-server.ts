@@ -224,7 +224,7 @@ export async function startFakeLlmServer(
           res.end();
           return;
         }
-        res.write(frames[index] as string);
+        res.write(frames[index]);
         index += 1;
         setTimeout(pump, stallMs);
       };

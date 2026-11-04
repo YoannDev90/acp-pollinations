@@ -108,6 +108,23 @@ export async function resolveApiKey(
   return "";
 }
 
+/**
+ * First of `candidates` that is a string or a number, rendered as text.
+ *
+ * The config file is `Record<string, unknown>`, so a value could be anything.
+ * Stringifying blindly would turn a typo'd object into `"[object Object]"` and
+ * hand `parseInt` a `NaN` it has to recover from; non-scalars are skipped
+ * instead, which leaves the caller on its default.
+ */
+function scalarOption(...candidates: unknown[]): string | undefined {
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" || typeof candidate === "number") {
+      return String(candidate);
+    }
+  }
+  return undefined;
+}
+
 /** Pure resolution of environment-driven fields, given an already-resolved key. */
 export function resolveEnvConfig(
   env: NodeJS.ProcessEnv,
@@ -123,12 +140,18 @@ export function resolveEnvConfig(
     : "ask";
 
   const maxTurnRequests = Number.parseInt(
-    env.ACP_MAX_TURN_REQUESTS ?? String(configFile.max_turn_requests ?? configFile.maxTurnRequests ?? ""),
+    env.ACP_MAX_TURN_REQUESTS ??
+      scalarOption(configFile.max_turn_requests, configFile.maxTurnRequests) ??
+      "",
     10,
   );
   const compactionTokens = Number.parseInt(
     env.ACP_COMPACTION_THRESHOLD_TOKENS ??
-      String(configFile.compaction_threshold_tokens ?? configFile.compactionThresholdTokens ?? ""),
+      scalarOption(
+        configFile.compaction_threshold_tokens,
+        configFile.compactionThresholdTokens,
+      ) ??
+      "",
     10,
   );
   const home =
@@ -159,7 +182,7 @@ export function resolveEnvConfig(
       Number.isFinite(compactionTokens) && compactionTokens >= -1
         ? compactionTokens
         : DEFAULT_COMPACTION_THRESHOLD_TOKENS,
-    permissionMode: permissionMode as "ask" | "allow",
+    permissionMode,
   };
 }
 

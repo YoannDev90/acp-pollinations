@@ -3,7 +3,7 @@ import { createInterface } from "node:readline";
 
 import type { ToolKind } from "@agentclientprotocol/sdk";
 import type { LlmToolDefinition } from "../llm.js";
-import type { ToolExecutionResult, ToolContext } from "../tools/index.js";
+import type { ToolExecutionResult } from "../tools/index.js";
 
 const MAX_MCP_OUTPUT_CHARS = 20_000;
 
@@ -355,7 +355,7 @@ export async function connectHttpMcpServer(
       cursor = typeof listed?.nextCursor === "string" ? listed.nextCursor : undefined;
     } while (cursor);
 
-    const built = buildMcpBindings(serverName as string, rawTools, send);
+    const built = buildMcpBindings(serverName, rawTools, send);
     tools.push(...built.tools);
     for (const [k,v] of built.bindings) bindings.set(k,v);
     toolDefinitions.push(...built.toolDefinitions);
@@ -369,7 +369,7 @@ export async function connectHttpMcpServer(
     // stateless: nothing to close
   };
 
-  return { name: serverName as string, tools, bindings, toolDefinitions, close };
+  return { name: serverName, tools, bindings, toolDefinitions, close };
 }
 
 export async function connectSseMcpServer(
@@ -392,7 +392,9 @@ export async function connectSseMcpServer(
     throw new Error(`MCP SSE connection failed (${response.status})`);
   }
 
-  const reader = response.body.getReader();
+  // `undici-types` declares `Response.body` without its element type, which
+  // makes every chunk `any`; naming the reader's type keeps the decoder honest.
+  const reader: ReadableStreamDefaultReader<Uint8Array> = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
 
@@ -569,7 +571,7 @@ export async function connectSseMcpServer(
       cursor = typeof listed?.nextCursor === "string" ? listed.nextCursor : undefined;
     } while (cursor);
 
-    const built = buildMcpBindings(serverName as string, rawTools, send);
+    const built = buildMcpBindings(serverName, rawTools, send);
     tools.push(...built.tools);
     for (const [k,v] of built.bindings) bindings.set(k,v);
     toolDefinitions.push(...built.toolDefinitions);
@@ -621,7 +623,7 @@ function buildMcpBindings(
       name: bindingName,
       kind,
       mutating,
-      title: (input) => `${serverName}: ${tool.name}`,
+      title: () => `${serverName}: ${tool.name}`,
       call: async (input) => {
         try {
           const result = (await send("tools/call", {

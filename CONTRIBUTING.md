@@ -17,10 +17,11 @@ Node.js 22 or newer is required (`engines` in `package.json`).
 
 ```sh
 npm run typecheck   # tsc --noEmit
+npm run lint        # eslint .
 npm test            # vitest run
 ```
 
-Both must pass. Tests never touch the network: they run against a fake
+All three must pass. Tests never touch the network: they run against a fake
 Pollinations endpoint in `tests/helpers/fake-llm-server.ts`, which scripts
 turns and records what the agent sent. Add a scripted turn there rather than
 calling a real API.

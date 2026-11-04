@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
-import { glob, open, readFile, readdir, stat, writeFile, mkdir, realpath } from "node:fs/promises";
-import { basename, dirname, resolve, sep } from "node:path";
+import { glob, open, readFile, readdir, stat, writeFile, mkdir } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 
 import type { AgentContext, ClientCapabilities, ToolKind } from "@agentclientprotocol/sdk";
 import { methods } from "@agentclientprotocol/sdk";
@@ -167,7 +167,7 @@ export const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
   glob: {
     kind: "search",
     mutating: false,
-    title: (input) => `Find ${String(input.pattern ?? "*")}`,
+    title: (input) => `Find ${argText(input.pattern, "*")}`,
     function: {
       name: "glob",
       description:
@@ -185,7 +185,7 @@ export const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
   grep: {
     kind: "search",
     mutating: false,
-    title: (input) => `Search for ${String(input.pattern ?? "")}`,
+    title: (input) => `Search for ${argText(input.pattern, "")}`,
     function: {
       name: "grep",
       description:
@@ -205,7 +205,7 @@ export const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
   bash: {
     kind: "execute",
     mutating: true,
-    title: (input) => `Run ${truncate(String(input.command ?? ""), 80)}`,
+    title: (input) => `Run ${truncate(argText(input.command, ""), 80)}`,
     function: {
       name: "bash",
       description:
@@ -305,6 +305,17 @@ export async function executeTool(
 
 function shortPath(path: unknown): string {
   return typeof path === "string" && path ? truncate(path, 60) : "<path>";
+}
+
+/**
+ * Renders a tool argument for a title.
+ *
+ * Arguments arrive as `unknown` — the model decides what to send — so a
+ * non-scalar falls back to `fallback` rather than printing
+ * `[object Object]` into the client's tool-call list.
+ */
+function argText(value: unknown, fallback: string): string {
+  return typeof value === "string" || typeof value === "number" ? String(value) : fallback;
 }
 
 function truncate(value: string, max: number): string {

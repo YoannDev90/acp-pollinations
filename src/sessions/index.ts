@@ -103,10 +103,10 @@ function isSafeId(id: unknown): id is string {
 export function createSessionStore(dir?: string): SessionStore {
   if (!dir) {
     return {
-      load: async () => null,
-      save: async () => {},
-      remove: async () => false,
-      list: async () => ({ sessions: [] }),
+      load: () => Promise.resolve(null),
+      save: () => Promise.resolve(),
+      remove: () => Promise.resolve(false),
+      list: () => Promise.resolve({ sessions: [] }),
     };
   }
 
@@ -334,7 +334,7 @@ function parseMessage(value: unknown): LlmMessage | null {
 
   const message: LlmMessage = {
     role: raw.role as LlmRole,
-    content: raw.content as string | null,
+    content: raw.content,
   };
 
   if (raw.tool_calls !== undefined) {
@@ -355,7 +355,7 @@ function parseMessage(value: unknown): LlmMessage | null {
 
   if (raw.reasoning_content !== undefined) {
     if (raw.reasoning_content !== null && typeof raw.reasoning_content !== "string") return null;
-    message.reasoning_content = raw.reasoning_content as string | null;
+    message.reasoning_content = raw.reasoning_content;
   }
 
   return message;

@@ -14,13 +14,15 @@ Read `README.md` for setup and `COVERAGE.md` for what is already implemented.
 
 ```sh
 npm run typecheck   # tsc --noEmit
+npm run lint        # eslint .
 npm test            # vitest run (builds first)
 npm run build       # compile to dist/
 npm run models      # inspect the live model catalogue
 npm run tck         # conformance suite
 ```
 
-Both `npm run typecheck` and `npm test` must pass before opening a PR.
+`npm run typecheck`, `npm run lint`, and `npm test` must all pass before
+opening a PR.
 
 ## Conventions
 

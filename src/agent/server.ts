@@ -20,7 +20,7 @@ import type {
 
 import type { AgentConfig } from "../config.js";
 import { LlmError, PollinationsLlm } from "../llm.js";
-import type { LlmMessage, LlmToolCall, LlmUsage } from "../llm.js";
+import type { LlmMessage, LlmToolCall } from "../llm.js";
 import {
   FALLBACK_MODELS,
   MODEL_CONFIG_ID,
@@ -42,8 +42,6 @@ import type { ToolContext, ToolExecutionResult, ToolName } from "../tools/index.
 import {
   connectMcpServers,
   mergeMcpBindings,
-  type McpConnection,
-  type McpToolBinding,
 } from "../mcp/index.js";
 
 export const AGENT_NAME = "pollinations";
@@ -85,7 +83,7 @@ type SlashCommand = {
   /** Whether a token after the name belongs to this command at all. */
   takesArg: boolean;
   /** Produces the text sent back as the assistant's turn. */
-  run: (context: SlashCommandContext) => Promise<string>;
+  run: (context: SlashCommandContext) => string | Promise<string>;
 };
 
 export type CreatePollinationsAgentOptions = {
@@ -179,7 +177,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     help: {
       description: "Show available commands",
       takesArg: true,
-      run: async () =>
+      run: () =>
         "Available commands:\n" +
         Object.entries(SLASH_COMMANDS)
           .map(([name, command]) => `- /${name.padEnd(10)}${command.description}`)
@@ -188,7 +186,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     status: {
       description: "Show session status",
       takesArg: true,
-      run: async ({ session }) =>
+      run: ({ session }) =>
         `Session: ${session.id}\n` +
         `Model: ${session.model}\n` +
         `Mode: ${session.mode}\n` +
@@ -242,7 +240,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     clear: {
       description: "Clear the conversation",
       takesArg: false,
-      run: async ({ session }) => {
+      run: ({ session }) => {
         session.history = [systemMessage(session.cwd)];
         session.lastPromptTokens = 0;
         session.costSoFar = 0;
@@ -253,13 +251,13 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     cost: {
       description: "Show token usage and cost",
       takesArg: false,
-      run: async ({ session }) =>
+      run: ({ session }) =>
         `Tokens (last request): ${session.lastPromptTokens}\nCost so far: ${session.costSoFar.toFixed(6)} USD`,
     },
     tools: {
       description: "List available tools",
       takesArg: false,
-      run: async ({ session }) => {
+      run: ({ session }) => {
         const mcp = [...session.mcpTools.keys()];
         return (
           `Built-in tools: ${Object.keys(TOOL_DEFINITIONS).join(", ")}\n` +
@@ -619,7 +617,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     };
   });
 
-  app.onRequest(methods.agent.session.close, async (ctx) => {
+  app.onRequest(methods.agent.session.close, (ctx) => {
     const { sessionId } = ctx.params;
     const live = sessions.get(sessionId);
     live?.abort?.abort();
@@ -950,17 +948,23 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       const contextWindow = info?.contextLength ?? 128_000;
       threshold = Math.floor(contextWindow * 0.85);
     }
-    if (threshold < 0) return; // disabled
-    if (session.lastPromptTokens < threshold) return;
-    if (session.history.length < 3) return;
+
+    // Below the threshold there is no conversation worth summarising, and a
+    // provider reporting an implausible count must not cost a wasted request.
+    if (
+      !shouldCompact({
+        threshold,
+        lastPromptTokens: session.lastPromptTokens,
+        historyLength: session.history.length,
+      })
+    ) {
+      return;
+    }
 
     process.stderr.write(
       `${AGENT_TITLE}: compacting session=${session.id} lastPromptTokens=${session.lastPromptTokens} ` +
         `threshold=${config.compactionThresholdTokens}\n`,
     );
-    // Below this there is no conversation worth summarising, and a provider
-    // reporting an implausible count must not cost a wasted model request.
-    if (session.history.length < 3) return;
 
     // The spec forbids these updates unless the client asked for them.
     const reportable = Boolean(capabilities?.session?.compaction);
@@ -1050,7 +1054,6 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     const messageId = nextMessageId(session);
     let text = "";
     let reasoning = "";
-    let usage: LlmUsage | undefined;
 
     const pendingCalls = new Map<number, { id: string; name: string; arguments: string }>();
     const tools = [...LLM_TOOLS, ...session.mcpToolDefinitions];
@@ -1095,7 +1098,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
 
       step = await iterator.next();
     }
-    usage = step.value;
+    const usage = step.value;
 
     // The provider's own token count is what decides when to compact, so the
     // threshold is measured rather than estimated.
@@ -1391,7 +1394,7 @@ function toRequestError(error: unknown): RequestError {
   if (error instanceof LlmError) {
     return RequestError.internalError({ status: error.status }, error.message);
   }
-  if (error instanceof ToolError) return RequestError.internalError(undefined, (error as ToolError).message);
+  if (error instanceof ToolError) return RequestError.internalError(undefined, error.message);
   if (error instanceof Error && error.name === "AbortError") {
     return RequestError.requestCancelled();
   }

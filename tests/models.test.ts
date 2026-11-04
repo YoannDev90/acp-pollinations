@@ -19,28 +19,11 @@ import {
   isKnownModel,
   parseModelCatalog,
 } from "../src/models.js";
-import type { CatalogModel } from "../src/models.js";
 import { DEFAULT_MODEL } from "../src/config.js";
 import {
   FAKE_MODELS_PAYLOAD,
   startFakeLlmServer,
 } from "./helpers/fake-llm-server.js";
-
-/** Minimal catalogue model with test-friendly defaults. */
-function model(overrides: Partial<CatalogModel> & { id: string }): CatalogModel {
-  return {
-    title: overrides.id,
-    description: null,
-    group: "official-quest",
-    contextLength: null,
-    promptPrice: null,
-    completionPrice: null,
-    health: null,
-    successRate: null,
-    requests: 0,
-    ...overrides,
-  };
-}
 
 /** Narrows a picker option to its `select` shape, which is all we build. */
 function asSelect(option: SessionConfigOption): SessionConfigSelect {
@@ -59,7 +42,7 @@ function groupedOptions(
 ): SessionConfigSelectGroup[] {
   const entries = options as Array<SessionConfigSelectOption | SessionConfigSelectGroup>;
   const looksGrouped = entries.every(
-    (entry) => "group" in entry && Array.isArray((entry as SessionConfigSelectGroup).options),
+    (entry) => "group" in entry && Array.isArray(entry.options),
   );
   if (!looksGrouped) throw new Error("expected grouped picker options");
   return entries as SessionConfigSelectGroup[];

@@ -20,7 +20,6 @@ import type {
   PromptResponse,
   RequestPermissionRequest,
   SessionUpdate,
-  Stream,
 } from "@agentclientprotocol/sdk";
 
 /**

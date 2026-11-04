@@ -13,7 +13,7 @@ const realWrite = process.stderr.write.bind(process.stderr);
 let installed: string | null = null;
 
 afterEach(async () => {
-  process.stderr.write = realWrite as typeof process.stderr.write;
+  process.stderr.write = realWrite;
   installed = null;
   await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
 });
@@ -26,7 +26,7 @@ afterEach(async () => {
  * every earlier test's wrapper as well.
  */
 async function install(maxBytes?: number): Promise<string> {
-  if (installed) process.stderr.write = realWrite as typeof process.stderr.write;
+  if (installed) process.stderr.write = realWrite;
   const dir = await createTmpDir("acp-logger");
   cleanups.push(dir.cleanup);
   installed = dir.path;
@@ -58,7 +58,7 @@ describe("installFileLogger", () => {
     process.stderr.write = ((chunk: unknown) => {
       seen.push(String(chunk));
       return true;
-    }) as typeof process.stderr.write;
+    });
     const logFile = installFileLogger(dir.path);
 
     process.stderr.write("plain line\n");
@@ -120,7 +120,7 @@ describe("installFileLogger", () => {
     process.stderr.write = ((chunk: unknown) => {
       seen.push(String(chunk));
       return true;
-    }) as typeof process.stderr.write;
+    });
     const logFile = installFileLogger(dir.path);
     process.stderr.write("still reaches the terminal\n");
 

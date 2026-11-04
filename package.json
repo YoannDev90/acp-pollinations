@@ -24,6 +24,7 @@
     "build": "npm run clean && tsc -p tsconfig.build.json && node -e \"require('fs').chmodSync('dist/bin/pollinations-acp-server.js', 0o755)\"",
     "watch": "tsc --watch",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
     "start": "node dist/bin/pollinations-acp-server.js",
     "models": "tsx scripts/check-catalogue.ts",
     "pretest": "npm run build",
@@ -48,14 +49,15 @@
     "url": "https://github.com/YoannDev90/acp-pollinations/issues"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "^2.1.0",
-    "zod": "^4.6.7"
+    "@agentclientprotocol/sdk": "^2.1.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@vitest/coverage-v8": "^5.0.5",
+    "eslint": "^10.14.0",
     "tsx": "^4.23.15",
     "typescript": "^5.3.3",
+    "typescript-eslint": "^8.72.1",
     "vitest": "^5.0.5"
   },
   "engines": {

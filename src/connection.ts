@@ -6,7 +6,7 @@ const connectionIds = new WeakMap<object, string>();
 let connectionCounter = 0;
 
 export function connectionKey(client: AgentContext): string {
-  let identity: object = client as object;
+  let identity: object = client;
   try {
     const symbol = [
       ...Object.getOwnPropertySymbols(client),
@@ -16,10 +16,10 @@ export function connectionKey(client: AgentContext): string {
       const context = (client as unknown as Record<symbol, () => unknown>)[symbol];
       if (typeof context === "function") identity = context.call(client) as object;
     } else {
-      identity = ((client as unknown as { cx?: unknown }).cx ?? client) as object;
+      identity = (client as unknown as { cx?: unknown }).cx ?? client;
     }
   } catch {
-    identity = ((client as unknown as { cx?: unknown }).cx ?? client) as object;
+    identity = (client as unknown as { cx?: unknown }).cx ?? client;
   }
 
   let key = connectionIds.get(identity);
