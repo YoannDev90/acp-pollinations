@@ -117,13 +117,18 @@ To cut a release:
    set `AGENT_VERSION` to that same version. Commit both.
 2. `npm version <patch|minor|major>` — updates `package.json` and creates the
    tag.
-3. `npm publish` — the `prepack` script rebuilds `dist/`, so a stale build
-   cannot ship.
-4. `git push --follow-tags`.
+3. `git push --follow-tags`.
 
-Publishing is a manual step taken from a clean tree with `npm run typecheck`,
-`npm run lint`, and `npm test` all green; there is no release workflow in CI
-yet.
+Pushing the tag runs the `Publish` workflow (`.github/workflows/publish.yml`),
+which refuses to start unless the tag, `package.json`, `AGENT_VERSION`, and
+the changelog section all name the same version, then runs typecheck, lint,
+and tests before `npm publish --provenance`.
+
+The workflow needs an `NPM_TOKEN` repository secret with permission to
+publish `acp-pollinations`; without it the publish step fails at
+authentication, which is the intended failure — a release should never fall
+back to a token someone left on a laptop. To publish from a clean tree
+instead, `npm publish` does the same thing locally through `prepack`.
 
 ## Reporting bugs
 

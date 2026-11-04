@@ -1,0 +1,82 @@
+name: Publish
+
+# Releases are cut by pushing a `v*` tag; this is what turns that tag into an
+# npm release. Kept out of `ci.yml` because a publish must never run on a
+# branch push or a pull request — only on a tag someone meant to ship.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  # npm provenance ties the tarball back to this run through OIDC, so a
+  # stolen publish token alone is not enough to ship an unattested build.
+  id-token: write
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  npm:
+    name: npm publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          # Writes the `.npmrc` that `NODE_AUTH_TOKEN` below fills in.
+          registry-url: https://registry.npmjs.org
+
+      - name: Install
+        run: npm ci
+
+      # The version lives in four places and nothing reconciles them but this
+      # step: the tag, `package.json`, `AGENT_VERSION`, and the changelog
+      # section. Each one alone would happily publish a build that reports a
+      # different version than the one it was tagged as.
+      - name: Check the version agrees everywhere
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          agent="$(sed -n 's/^export const AGENT_VERSION = "\(.*\)";$/\1/p' src/agent/server.ts)"
+
+          fail=0
+          if [ "$version" != "$pkg" ]; then
+            echo "::error::tag says $version but package.json says $pkg"
+            fail=1
+          fi
+          if [ "$version" != "$agent" ]; then
+            echo "::error::tag says $version but AGENT_VERSION says $agent"
+            fail=1
+          fi
+          if ! grep -qF "## [$version]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no section for $version — move Unreleased under it first"
+            fail=1
+          fi
+          exit "$fail"
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      # `npm test` builds first (see the `pretest` script), because the e2e
+      # suite spawns the built binary rather than the sources.
+      - name: Test
+        run: npm test
+
+      # `prepack` rebuilds `dist/` again, so the tarball is always this
+      # commit's build rather than whatever the test run left behind.
+      # Provenance needs the OIDC token from `id-token: write` above; the
+      # package is unscoped, so it is public without being asked.
+      - name: Publish
+        run: npm publish --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

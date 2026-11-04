@@ -40,6 +40,9 @@ first time in 1.0.0.
 - **CI on Node 22 and 24**: typecheck, type-aware lint, tests with coverage
   thresholds, `npm audit --audit-level=high`, and a separate acp-tck
   conformance job.
+- **Publish workflow** on a `v*` tag: refuses to start unless the tag,
+  `package.json`, `AGENT_VERSION`, and the changelog section agree, then runs
+  the checks and publishes with npm provenance.
 
 ### Security
 
