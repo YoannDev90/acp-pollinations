@@ -14,7 +14,14 @@ import { createTmpDir } from "./helpers/tmp.js";
 const projectRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const binary = join(projectRoot, "dist", "bin", "pollinations-acp-server.js");
 
-type ProcessHarness = Harness & { stderr: () => string; kill: () => void };
+type ProcessHarness = Harness & {
+  stderr: () => string;
+  kill: () => void;
+  /** Sends the agent process a signal, the way an editor would. */
+  signal: (signal: NodeJS.Signals) => void;
+  /** Resolves with the agent process's exit status, once stdio has drained. */
+  exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
+};
 type Op = (harness: ProcessHarness, server: FakeLlmServer) => Promise<void>;
 
 /**
@@ -129,5 +136,29 @@ describe("pollinations-acp-server (subprocess)", () => {
       expect(names).toContain("write_file");
       expect(names).toContain("bash");
     });
+  });
+
+  it.each(["SIGINT", "SIGTERM"] as const)("winds down cleanly on %s", async (signal) => {
+    // Captured outside the callback: the process has to be allowed to leave
+    // on its own, which only finishes after the scenario itself is over.
+    const captured: ProcessHarness[] = [];
+
+    await withAgentProcess([{ text: "pong" }], async (harness) => {
+      captured.push(harness);
+      await harness.prompt("ping");
+      harness.signal(signal);
+    });
+
+    const harness = captured[0];
+    if (!harness) throw new Error("scenario never ran");
+
+    const outcome = await harness.exited;
+    expect(outcome.code).toBe(0);
+    // A plain exit must not be confused with the OS killing the process: the
+    // wind-down is what ends it, and it says so on stderr.
+    expect(harness.stderr()).toContain(`shutting down (${signal})`);
+    // The session created by the scenario was still live, so it was part of
+    // the wind-down that wrote the transcripts back.
+    expect(harness.stderr()).toContain("shutdown complete (1 session(s))");
   });
 });

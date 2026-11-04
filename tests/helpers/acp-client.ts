@@ -87,13 +87,29 @@ export async function withInProcessClient(
 export async function withSubprocessClient(
   command: string[],
   options: BaseOptions & { env?: Record<string, string | undefined> },
-  op: (harness: Harness & { stderr: () => string; kill: () => void }) => Promise<void>,
+  op: (
+    harness: Harness & {
+      stderr: () => string;
+      kill: () => void;
+      /** Sends the agent process a signal, the way an editor would. */
+      signal: (signal: NodeJS.Signals) => void;
+      /** Resolves with the agent process's exit status. */
+      exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
+    },
+  ) => Promise<void>,
 ): Promise<void> {
   const child: ChildProcess = spawn(command[0] as string, command.slice(1), {
     stdio: ["pipe", "pipe", "pipe"],
     env: { ...process.env, ...options.env },
   });
 
+  // Resolved on `close` rather than `exit`: `exit` can fire while stderr is
+  // still delivering, and a test asserting on the last log line would race it.
+  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+    child.once("close", (code, signal) => resolve({ code, signal }));
+  });
+
+  let signalled = false;
   let stderr = "";
   child.stderr?.on("data", (chunk: Buffer) => {
     stderr += chunk.toString("utf8");
@@ -107,11 +123,35 @@ export async function withSubprocessClient(
   try {
     await app.connectWith(stream, (ctx) =>
       runScenario(ctx, harness, (h) =>
-        op({ ...h, stderr: () => stderr, kill: () => child.kill("SIGKILL") }),
+        op({
+          ...h,
+          stderr: () => stderr,
+          kill: () => child.kill("SIGKILL"),
+          signal: (signal) => {
+            signalled = true;
+            void child.kill(signal);
+          },
+          exited,
+        }),
       ),
     );
   } finally {
-    if (!child.killed) child.kill("SIGKILL");
+    if (signalled) {
+      // The test's subject is the agent leaving on its own, so wait for it
+      // instead of racing SIGKILL against a wind-down still in progress.
+      await Promise.race([
+        exited,
+        new Promise<never>((_, reject) => {
+          const timer = setTimeout(
+            () => reject(new Error("agent did not exit within 5s of the signal")),
+            5_000,
+          );
+          timer.unref();
+        }),
+      ]);
+    } else if (!child.killed) {
+      child.kill("SIGKILL");
+    }
   }
 }
 

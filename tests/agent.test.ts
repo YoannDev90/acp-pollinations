@@ -3,11 +3,12 @@ import { join } from "node:path";
 
 import { PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 import type { SessionConfigOption, SessionConfigSelectGroup, ClientSessionCapabilities } from "@agentclientprotocol/sdk";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 import type { AgentConfig } from "../src/config.js";
 import { PollinationsLlm } from "../src/llm.js";
 import { createPollinationsAgent, promptToText } from "../src/agent/server.js";
+import type { PollinationsAgentApp } from "../src/agent/server.js";
 import { withInProcessClient } from "./helpers/acp-client.js";
 import type { Harness } from "./helpers/acp-client.js";
 import { startFakeLlmServer } from "./helpers/fake-llm-server.js";
@@ -21,7 +22,7 @@ afterAll(async () => {
   await Promise.all(cleanups.map((cleanup) => cleanup()));
 });
 
-type OpArgs = { cwd: string; server: FakeLlmServer; harness: Harness };
+type OpArgs = { cwd: string; server: FakeLlmServer; harness: Harness; agent: PollinationsAgentApp };
 
 /**
  * Boots a fake endpoint, a scratch workspace, and an agent, then runs `op`
@@ -55,7 +56,7 @@ async function withAgent(
   });
 
   await withInProcessClient(agent, { cwd: workspace.path }, async (harness) => {
-    await op({ cwd: workspace.path, server, harness });
+    await op({ cwd: workspace.path, server, harness, agent });
   });
 }
 
@@ -1013,6 +1014,69 @@ describe("slash commands", () => {
       await harness.prompt("/clear now");
       expect(server.requests).toHaveLength(2);
       expect(server.requests[1]?.messages.some((m) => String(m.content).includes("/clear now"))).toBe(true);
+    });
+  });
+});
+
+describe("shutdown", () => {
+  it("aborts an in-flight turn and writes the transcript back", async () => {
+    const state = await createTmpDir("acp-shutdown");
+    cleanups.push(state.cleanup);
+
+    await withAgent(
+      // The stream keeps going for seconds: only the abort can finish this turn.
+      [{ text: "unreachable ".repeat(50), stallMs: 5_000 }],
+      { sessionsDir: state.path },
+      async ({ harness, agent }) => {
+        const pending = harness.prompt("long turn");
+        await harness.waitFor(() =>
+          harness.updates.some(
+            (u) => (u as { sessionUpdate?: string }).sessionUpdate === "agent_message_chunk",
+          ),
+        );
+
+        await agent.shutdown();
+
+        const response = await pending;
+        expect(response.stopReason).toBe("cancelled");
+
+        // The transcript landed with the prompt still in it, so a restart
+        // reloads the thread instead of rewinding to the previous save.
+        const [name] = await readdir(state.path);
+        if (!name) throw new Error("shutdown did not persist the session");
+        const record = JSON.parse(await readFile(join(state.path, name), "utf8")) as {
+          history: Array<{ role: string; content: unknown }>;
+        };
+        expect(
+          record.history.some(
+            (message) => message.role === "user" && JSON.stringify(message.content).includes("long turn"),
+          ),
+        ).toBe(true);
+      },
+    );
+  });
+
+  it("runs once, however often it is asked", async () => {
+    await withAgent([{ text: "hi" }], {}, async ({ harness, agent }) => {
+      await harness.prompt("hello");
+
+      // The only observable of a repeated call is the wind-down log: a second
+      // pass would write the same sessions again and report a second count.
+      const lines: string[] = [];
+      const spy = vi
+        .spyOn(process.stderr, "write")
+        .mockImplementation((chunk: string | Uint8Array) => {
+          lines.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+          return true;
+        });
+      try {
+        await Promise.all([agent.shutdown(), agent.shutdown()]);
+        await agent.shutdown();
+      } finally {
+        spy.mockRestore();
+      }
+
+      expect(lines.filter((line) => line.includes("shutdown complete"))).toHaveLength(1);
     });
   });
 });

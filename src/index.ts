@@ -11,7 +11,7 @@ export {
   createPollinationsAgent,
   promptToText,
 } from "./agent/server.js";
-export type { CreatePollinationsAgentOptions } from "./agent/server.js";
+export type { CreatePollinationsAgentOptions, PollinationsAgentApp } from "./agent/server.js";
 
 export {
   DEFAULT_BASE_URL,

@@ -53,6 +53,17 @@ export { promptToText } from "../messages.js";
 /** Config option id for the reasoning/thought-level selector. */
 const REASONING_CONFIG_ID = "reasoning";
 
+/**
+ * How long `shutdown()` waits for an aborted turn to unwind before writing
+ * the transcript itself, in milliseconds.
+ *
+ * The turn's own `finally` writes the same file, and the store writes through
+ * one shared temp path, so the two must not overlap. A turn that ignores the
+ * abort for longer than this is persisted anyway: a possibly stale transcript
+ * beats a wind-down that never finishes.
+ */
+const TURN_SETTLE_MS = 1_000;
+
 const REASONING_LEVELS: ReadonlyArray<{ value: string; name: string }> = [
   { value: "none", name: "None" },
   { value: "low", name: "Low" },
@@ -99,6 +110,14 @@ export type CreatePollinationsAgentOptions = {
   catalogTtlMs?: number;
 };
 
+/**
+ * The agent app plus the hook the entry point needs when the process goes away.
+ *
+ * `AgentApp` only knows about the protocol connection; it has no notion of
+ * "the operating system is asking me to stop". `shutdown` is that notion:
+ * abort in-flight turns, close MCP children, write the transcripts back.
+ */
+export type PollinationsAgentApp = AgentApp & { shutdown(): Promise<void> };
 
 /**
  * Builds the ACP coding agent.
@@ -107,7 +126,7 @@ export type CreatePollinationsAgentOptions = {
  * in-process in tests) and drives Pollinations chat completions with a tool
  * loop over the session workspace.
  */
-export function createPollinationsAgent(options: CreatePollinationsAgentOptions): AgentApp {
+export function createPollinationsAgent(options: CreatePollinationsAgentOptions): PollinationsAgentApp {
   const { config } = options;
   // The LLM client requires a key, but `session/new` rejects before any request
   // is made when one is missing, so the agent can still answer `initialize` and
@@ -856,16 +875,53 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       if (abort.signal.aborted) return { stopReason: "cancelled" };
       throw toRequestError(error);
     } finally {
-      session.abort = null;
-      ctx.signal.removeEventListener("abort", forwardAbort);
       process.stderr.write(`${AGENT_TITLE}: prompt finished session=${session.id}\n`);
       // Persist after every turn, including cancelled and failed ones, so a
       // restart never rewinds a thread to an earlier point.
       if (!session.deleted) await persist(session);
+      ctx.signal.removeEventListener("abort", forwardAbort);
+      // Released after the write, not before: `shutdown()` reads this field to
+      // know a turn is still running, and it must not start its own write over
+      // the same session file while this one is still landing.
+      if (session.abort === abort) session.abort = null;
     }
   });
 
-  return app;
+  /**
+   * Winds the agent down so the process can exit: every in-flight turn is
+   * aborted, every MCP child is closed, and each live transcript is written
+   * back first — an editor restarting mid-turn should not rewind the thread
+   * to its previous save.
+   *
+   * Memoised, so a signal arriving while a shutdown is already running joins
+   * that one instead of starting a second pass over the same sessions.
+   */
+  let shutdownRun: Promise<void> | null = null;
+  function shutdown(): Promise<void> {
+    shutdownRun ??= (async () => {
+      const live = [...sessions.values()];
+      await Promise.all(
+        live.map(async (session) => {
+          session.abort?.abort();
+          for (const connection of session.mcpConnections) connection.close();
+          // The aborted turn persists the same file from its own `finally`.
+          // Wait for it to let go of `session.abort` first, so the two writes
+          // never run over the shared temp file at the same time.
+          const deadline = Date.now() + TURN_SETTLE_MS;
+          while (session.abort && Date.now() < deadline) {
+            await new Promise((resolve) => setTimeout(resolve, 5));
+          }
+          if (!session.deleted) await persist(session);
+        }),
+      );
+      process.stderr.write(
+        `${AGENT_TITLE}: shutdown complete (${live.length} session(s))\n`,
+      );
+    })();
+    return shutdownRun;
+  }
+
+  return Object.assign(app, { shutdown });
 
   /* ---------------------------------------------------------------- *
    * Turn internals
