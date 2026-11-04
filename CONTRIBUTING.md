@@ -84,6 +84,47 @@ becomes a missing session. An unreachable catalogue falls back to an offline
 list. A failed persistence write is reported and the turn continues. Reserve
 thrown errors for requests the client must be told about.
 
+## Versioning and releases
+
+The package follows [Semantic Versioning](https://semver.org/). Two values
+carry the version, and a release bumps both:
+
+- `version` in `package.json`, which npm and the tag see;
+- `AGENT_VERSION` in `src/agent/server.ts`, which the agent reports in
+  `initialize` and prints in its startup banner.
+
+Nothing checks that they agree, so that pairing is the release author's to
+get right.
+
+**What counts as public API:** everything `src/index.ts` exports, and the ACP
+behaviour the binary speaks — its advertised capabilities, config options,
+tool names, and error codes. The numbers below are about those.
+
+- **Patch** — a fix that leaves both the exports and the wire behaviour alone.
+- **Minor** — a new export, capability, config option, or tool: anything an
+  existing client keeps working through.
+- **Major** — removing or renaming an export, or changing a wire-visible
+  value (a tool name, an error code, the default model) a client may depend
+  on.
+
+Every pull request adds its line to `Unreleased` in `CHANGELOG.md`, under
+Added, Changed, Fixed, or Security — a change nobody wrote down is a change
+the next reader has to reconstruct from the log.
+
+To cut a release:
+
+1. Move the `Unreleased` section to the new version with today's date, and
+   set `AGENT_VERSION` to that same version. Commit both.
+2. `npm version <patch|minor|major>` — updates `package.json` and creates the
+   tag.
+3. `npm publish` — the `prepack` script rebuilds `dist/`, so a stale build
+   cannot ship.
+4. `git push --follow-tags`.
+
+Publishing is a manual step taken from a clean tree with `npm run typecheck`,
+`npm run lint`, and `npm test` all green; there is no release workflow in CI
+yet.
+
 ## Reporting bugs
 
 Open an issue with:

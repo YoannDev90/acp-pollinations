@@ -175,7 +175,8 @@ npm run watch       # tsc --watch
 npm run tck         # conformance suite
 ```
 
-Tests never touch the network. See `CONTRIBUTING.md` for conventions.
+Tests never touch the network. See `CONTRIBUTING.md` for conventions and
+`CHANGELOG.md` for what has changed.
 
 ## Library usage
 
