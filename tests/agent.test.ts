@@ -1111,4 +1111,20 @@ describe("promptToText", () => {
   it("labels a prompt with no content blocks", () => {
     expect(promptToText([])).toBe("(empty prompt)");
   });
+
+  it("describes a resource link by its uri and name", () => {
+    const text = promptToText([
+      { type: "resource_link", uri: "file:///z.md", name: "notes" },
+    ]);
+    expect(text).toBe("--- file:///z.md (notes) ---");
+  });
+
+  it("names a content block kind it cannot render", () => {
+    const text = promptToText([
+      // The ACP schema allows block kinds this agent never emits; render a
+      // visible placeholder rather than dropping the user's content silently.
+      { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+    ]);
+    expect(text).toBe("[image content is not supported by this agent]");
+  });
 });

@@ -57,4 +57,17 @@ describe("createSseParser", () => {
     const parser = createSseParser();
     expect(parser.push("event: ping\n\n")).toEqual([]);
   });
+
+  it("treats a field with no colon as an empty value", () => {
+    const parser = createSseParser();
+    // The spec says a lone field name means "empty value"; a reader that split
+    // on ":" blindly would drop the data line entirely.
+    expect(parser.push("data\n\n")).toEqual([{ data: "" }]);
+  });
+
+  it("ignores a trailing fragment that carries no data field", () => {
+    const parser = createSseParser();
+    expect(parser.push("event: ping")).toEqual([]);
+    expect(parser.flush()).toEqual([]);
+  });
 });

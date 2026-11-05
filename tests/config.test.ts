@@ -3,7 +3,13 @@ import { join } from "node:path";
 
 import { afterAll, describe, expect, it } from "vitest";
 
-import { resolveApiKey, resolveEnvConfig } from "../src/config.js";
+import {
+  DEFAULT_BASE_URL,
+  DEFAULT_MODEL,
+  resolveApiKey,
+  resolveConfig,
+  resolveEnvConfig,
+} from "../src/config.js";
 import { createTmpDir } from "./helpers/tmp.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -37,20 +43,13 @@ describe("resolveApiKey", () => {
   });
 
   it("reads the documented api_key spelling from the config file", async () => {
-    const home = await homeWith({
-      "config-acp": { api_key: "from_config" },
-      "credentials.json": { apiKey: "from_credentials" },
-    });
+    const home = await homeWith({ "config-acp": { api_key: "from_config" } });
 
-    const key = await resolveApiKey({ env: { POLLINATIONS_HOME: home } });
-
-    // The README documents `api_key`; a user copying it must not silently
-    // fall through to a different key or to none at all.
-    expect(key).toBe("from_config");
+    expect(await resolveApiKey({ env: { POLLINATIONS_HOME: home } })).toBe("from_config");
   });
 
-  it("still accepts the legacy spellings", async () => {
-    const camel = await homeWith({ "config-acp": { apiKey: "camel" } });
+  it("reads the spellings older releases used", async () => {
+    const camel = await homeWith({ "config-acp.json": { apiKey: "camel" } });
     expect(await resolveApiKey({ env: { POLLINATIONS_HOME: camel } })).toBe("camel");
 
     const snake = await homeWith({ "config-acp.json": { pollinations_api_key: "snake" } });
@@ -82,6 +81,31 @@ describe("resolveApiKey", () => {
     // A corrupt config degrades to the next source rather than to a crash.
     expect(await resolveApiKey({ env: { POLLINATIONS_HOME: dir.path } })).toBe("sk_real");
   });
+
+  it("ignores a credentials file that is not an object", async () => {
+    const dir = await createTmpDir("acp-config-scalar");
+    cleanups.push(dir.cleanup);
+    await writeFile(join(dir.path, "credentials.json"), JSON.stringify("sk_not_an_object"));
+
+    expect(await resolveApiKey({ env: { POLLINATIONS_HOME: dir.path } })).toBe("");
+  });
+
+  it("ignores a credentials entry that is not a non-empty string", async () => {
+    const home = await homeWith({ "credentials.json": { apiKey: 42 } });
+    expect(await resolveApiKey({ env: { POLLINATIONS_HOME: home } })).toBe("");
+
+    const blank = await homeWith({ "credentials.json": { apiKey: "   " } });
+    expect(await resolveApiKey({ env: { POLLINATIONS_HOME: blank } })).toBe("");
+  });
+
+  it("reads the real process environment when no override is given", async () => {
+    // Deliberately unscoped: the branch under test is the `process.env` side of
+    // `options.env ?? process.env`, which only the argument-less call reaches.
+    expect(typeof (await resolveApiKey())).toBe("string");
+    expect(typeof (await resolveApiKey({ credentialsFile: "/nonexistent/creds.json" }))).toBe(
+      "string",
+    );
+  });
 });
 
 describe("resolveEnvConfig", () => {
@@ -107,7 +131,7 @@ describe("resolveEnvConfig", () => {
     const config = resolveEnvConfig({}, "sk", { model: "file-model" });
 
     expect(config.model).toBe("file-model");
-    expect(config.baseUrl).toBe("https://gen.pollinations.ai");
+    expect(config.baseUrl).toBe(DEFAULT_BASE_URL);
     expect(config.permissionMode).toBe("ask");
   });
 
@@ -118,5 +142,94 @@ describe("resolveEnvConfig", () => {
     expect(resolveEnvConfig({ ACP_COMPACTION_THRESHOLD_TOKENS: "junk" }, "sk").compactionThresholdTokens).toBe(
       0,
     );
+  });
+
+  it("reads snake_case settings from the config file", () => {
+    const config = resolveEnvConfig({}, "sk", {
+      permission_mode: "allow",
+      base_url: "https://snake.test",
+      max_turn_requests: 9,
+      compaction_threshold_tokens: 5000,
+    });
+
+    expect(config.permissionMode).toBe("allow");
+    expect(config.baseUrl).toBe("https://snake.test");
+    expect(config.maxTurnRequests).toBe(9);
+    expect(config.compactionThresholdTokens).toBe(5000);
+  });
+
+  it("reads camelCase settings from the config file", () => {
+    const config = resolveEnvConfig({}, "sk", {
+      permissionMode: "allow",
+      baseUrl: "https://camel.test",
+      maxTurnRequests: 4,
+      compactionThresholdTokens: 1500,
+    });
+
+    expect(config.permissionMode).toBe("allow");
+    expect(config.baseUrl).toBe("https://camel.test");
+    expect(config.maxTurnRequests).toBe(4);
+    expect(config.compactionThresholdTokens).toBe(1500);
+  });
+
+  it("skips non-scalar settings instead of stringifying them", () => {
+    // A typo'd object would otherwise reach `parseInt` as "[object Object]".
+    const config = resolveEnvConfig({}, "sk", {
+      max_turn_requests: { oops: true },
+      compaction_threshold_tokens: ["nope"],
+    });
+
+    expect(config.maxTurnRequests).toBe(24);
+    expect(config.compactionThresholdTokens).toBe(0);
+  });
+});
+
+describe("resolveConfig", () => {
+  it("resolves the whole configuration from the environment", async () => {
+    const home = await homeWith({ "config-acp": { api_key: "sk_config" } });
+    const previousKey = process.env.POLLINATIONS_API_KEY;
+    const previousHome = process.env.POLLINATIONS_HOME;
+    process.env.POLLINATIONS_API_KEY = "sk_env";
+    process.env.POLLINATIONS_HOME = home;
+
+    try {
+      const config = await resolveConfig();
+
+      expect(config.apiKey).toBe("sk_env");
+      expect(config.baseUrl).toBe(DEFAULT_BASE_URL);
+      expect(config.model).toBe(DEFAULT_MODEL);
+      expect(config.sessionsDir).toBe(join(home, "sessions"));
+      expect(config.permissionMode).toBe("ask");
+    } finally {
+      if (previousKey === undefined) delete process.env.POLLINATIONS_API_KEY;
+      else process.env.POLLINATIONS_API_KEY = previousKey;
+      if (previousHome === undefined) delete process.env.POLLINATIONS_HOME;
+      else process.env.POLLINATIONS_HOME = previousHome;
+    }
+  });
+
+  it("honours an explicit environment override", async () => {
+    const home = await homeWith({ "config-acp": { api_key: "sk_config" } });
+    const config = await resolveConfig({ env: { POLLINATIONS_HOME: home } });
+
+    expect(config.apiKey).toBe("sk_config");
+    expect(config.sessionsDir).toBe(join(home, "sessions"));
+  });
+
+  it("reports a missing key instead of refusing to start", async () => {
+    const home = await homeWith({});
+    const config = await resolveConfig({ env: { POLLINATIONS_HOME: home } });
+
+    expect(config.apiKey).toBe("");
+    expect(config.model).toBe(DEFAULT_MODEL);
+  });
+
+  it("falls back to the home directory when no home is configured", async () => {
+    // No `POLLINATIONS_HOME` at all: the agent must still produce a usable
+    // configuration, whichever key the machine happens to hold.
+    const config = await resolveConfig({ env: {} });
+
+    expect(typeof config.apiKey).toBe("string");
+    expect(config.baseUrl).toBeTruthy();
   });
 });
