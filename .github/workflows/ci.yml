@@ -82,5 +82,11 @@ jobs:
       - name: Build
         run: npm run build
 
+      # The runner images do not ship `uv`, and `scripts/tck.ts` drives the
+      # suite through it. Without this step the spawn fails before a single
+      # requirement is checked, which reads as a conformance failure.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10
+
       - name: Conformance
         run: npm run tck

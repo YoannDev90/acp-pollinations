@@ -204,7 +204,12 @@ async function main(): Promise<void> {
   const code = await new Promise<number | null>((resolve) => {
     const child = spawn("uv", args, { cwd: ROOT, stdio: "inherit" });
     child.on("exit", resolve);
-    child.on("error", () => resolve(1));
+    child.on("error", (error) => {
+      // A missing `uv` otherwise surfaces as a bare exit 1 that looks like a
+      // conformance failure, which sends the reader hunting the wrong way.
+      log(`could not run uv: ${error.message} — install uv or set up astral-sh/setup-uv`);
+      resolve(1);
+    });
   });
 
   await server?.close();
