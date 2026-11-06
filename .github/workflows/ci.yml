@@ -50,6 +50,15 @@ jobs:
         if: matrix.node == 22
         run: npm run coverage
 
+      # Same guard as the coverage step: only that run writes lcov.info, so
+      # the other matrix leg has nothing to upload.
+      - name: Upload coverage to Codecov
+        if: matrix.node == 22
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage/lcov.info
+          token: ${{ secrets.CODECOV_TOKEN }}
+
       # High and critical advisories fail the build. A registry hiccup fails
       # this step too, which is the better failure mode than skipping it.
       - name: Audit dependencies
