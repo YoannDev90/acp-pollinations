@@ -4,10 +4,14 @@
 
 # acp-pollinations
 
-[![CI](https://github.com/YoannDev90/acp-pollinations/actions/workflows/ci.yml/badge.svg)](https://github.com/YoannDev90/acp-pollinations/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/YoannDev90/acp-pollinations/branch/main/graph/badge.svg)](https://codecov.io/gh/YoannDev90/acp-pollinations)
-[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![node](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](https://nodejs.org)
+<p align="center">
+  <a href="https://github.com/YoannDev90/acp-pollinations/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/YoannDev90/acp-pollinations/ci.yml?branch=main&style=for-the-badge&label=CI" alt="CI"></a>
+  <a href="https://codecov.io/gh/YoannDev90/acp-pollinations"><img src="https://img.shields.io/codecov/c/github/YoannDev90/acp-pollinations?branch=main&style=for-the-badge&label=coverage" alt="coverage"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=for-the-badge" alt="license"></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%3E%3D22-339933?style=for-the-badge&logo=nodedotjs&logoColor=white" alt="node"></a>
+  <a href="https://agentclientprotocol.com"><img src="https://img.shields.io/badge/ACP-v1-ff6b4a?style=for-the-badge&logoColor=white" alt="ACP v1"></a>
+  <a href="https://www.typescriptlang.org"><img src="https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript"></a>
+</p>
 
 > A coding agent for your editor, powered by [Pollinations](https://pollinations.ai).
 
