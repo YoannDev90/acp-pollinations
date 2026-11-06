@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type {
   SessionConfigOption,
@@ -153,6 +153,88 @@ describe("parseModelCatalog", () => {
       "official/unpriced-d",
       "community/free-c:free",
     ]);
+  });
+
+  it("skips entries an agent cannot use, including ones without an id", () => {
+    const models = parseModelCatalog({
+      data: [
+        // No id at all: there is nothing to offer the picker.
+        { category: "text", tools: true },
+        // A community model that publishes no price is free, so users are not
+        // charged for an unstated amount.
+        { id: "community/no-price", category: "text", tools: true, community: true },
+        // An agent wrapper keeps its base model's pricing, never the free pass.
+        { id: "community/agent", category: "text", tools: true, community: true, agent: true },
+        // Endpoints and capabilities are filtered defensively: only strings
+        // count, and chat completions plus tool calling are required.
+        {
+          id: "official/no-chat",
+          category: "text",
+          tools: true,
+          supported_endpoints: ["/v1/embeddings", 7],
+        },
+        {
+          id: "official/tool-calling",
+          category: "text",
+          supported_endpoints: ["/v1/chat/completions"],
+          capabilities: ["tool_calling", null],
+        },
+      ],
+    });
+
+    expect(models.map((model) => model.id)).toEqual([
+      "official/tool-calling",
+      "community/agent",
+      "community/no-price",
+    ]);
+    expect(models[0]?.group).toBe("official-quest");
+    expect(models[1]?.group).toBe("community-quest");
+    expect(models[2]?.group).toBe("community-free");
+  });
+
+  it("sorts ties by request volume, then alphabetically", () => {
+    const entry = (id: string, requests: number, successRate?: number) => ({
+      id,
+      category: "text",
+      tools: true,
+      health:
+        successRate === undefined
+          ? undefined
+          : { status: "healthy", success_rate: successRate, requests },
+    });
+    const models = parseModelCatalog({
+      data: [
+        entry("official/c", 5, 90),
+        entry("official/a", 5, 90),
+        entry("official/b", 9, 90),
+        // An unknown success rate sinks below every known one, and two
+        // unknowns still order by request volume.
+        entry("official/e", 1),
+        entry("official/d", 7),
+      ],
+    });
+
+    // Same group and success rate: the busiest first, then id order so the
+    // picker is stable across refreshes.
+    expect(models.map((model) => model.id)).toEqual([
+      "official/b",
+      "official/a",
+      "official/c",
+      "official/d",
+      "official/e",
+    ]);
+  });
+
+  it("formats a very large context window in rounded millions", () => {
+    const models = parseModelCatalog({
+      data: [{ id: "official/huge", category: "text", tools: true, context_length: 32_000_000 }],
+    });
+
+    const option = asSelect(buildModelOption(models, "official/huge"));
+    const groups = groupedOptions(option.options);
+    // `describeModel` is the only caller of `formatContext`; the picker shows
+    // "32M ctx" rather than a 32,000K count.
+    expect(groups[0]?.options[0]?.description).toContain("32M ctx");
   });
 
   it("survives a payload that is not a catalogue", () => {
@@ -316,6 +398,35 @@ describe("fetchModelCatalog", () => {
     }
   });
 
+  it("gives up after three transient failures", async () => {
+    // Retries sleep 1s then 2s; fake timers keep that out of the suite's wall
+    // clock while still exercising the real backoff code.
+    vi.useFakeTimers();
+    let calls = 0;
+    const failingFetch: typeof fetch = () => {
+      calls += 1;
+      return Promise.reject(new TypeError("fetch failed"));
+    };
+
+    try {
+      const pending = fetchModelCatalog({
+        baseUrl: "http://models.invalid",
+        fetchImpl: failingFetch,
+      });
+      // Attach the expectation before advancing: the final rejection must never
+      // be left without a handler.
+      const outcome = expect(pending).rejects.toThrow(/fetch failed/);
+      await vi.advanceTimersByTimeAsync(1000 + 2000);
+
+      // Every attempt was retryable, so the loop runs to its end and reports
+      // the last failure rather than one of the earlier ones.
+      await outcome;
+      expect(calls).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("propagates aborts from the caller", async () => {
     const controller = new AbortController();
     controller.abort();
@@ -325,6 +436,56 @@ describe("fetchModelCatalog", () => {
       await expect(
         fetchModelCatalog({ baseUrl: server.baseUrl, signal: controller.signal }),
       ).rejects.toThrow();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("forwards an abort that lands while the request is in flight", async () => {
+    const controller = new AbortController();
+    // A fetch that never answers on its own: only the forwarded abort can end
+    // it, which is exactly the listener's job.
+    const hangingFetch: typeof fetch = (_input, init) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+      });
+
+    const pending = fetchModelCatalog({
+      baseUrl: "http://models.invalid",
+      fetchImpl: hangingFetch,
+      signal: controller.signal,
+    });
+    controller.abort();
+
+    await expect(pending).rejects.toThrow();
+  });
+
+  it("times out an endpoint that never answers", async () => {
+    const server = await startFakeLlmServer([]);
+    let calls = 0;
+    const slowFetch: typeof fetch = (input, init) => {
+      calls += 1;
+      // The first call hangs past its budget so the per-request timeout fires;
+      // the retry answers at once.
+      if (calls === 1) {
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("timed out", "TimeoutError")),
+          );
+        });
+      }
+      return fetch(input, init);
+    };
+
+    try {
+      const models = await fetchModelCatalog({
+        baseUrl: server.baseUrl,
+        fetchImpl: slowFetch,
+        timeoutMs: 5,
+      });
+
+      expect(calls).toBe(2);
+      expect(models.length).toBeGreaterThan(0);
     } finally {
       await server.close();
     }

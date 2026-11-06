@@ -47,6 +47,18 @@ describe("installFileLogger", () => {
     expect(contents).toMatch(/^\[\d{4}-\d{2}-\d{2}T[\d:.]+Z\] hello from the agent/m);
   });
 
+  it("accepts a Buffer chunk with an explicit encoding", async () => {
+    const logFile = await install();
+
+    // stderr is also written with raw bytes by Node internals; the mirror must
+    // decode them instead of assuming a string.
+    process.stderr.write(Buffer.from("buffered line\n"), "utf8");
+    process.stderr.write(Buffer.from("default-encoding line\n"));
+
+    const contents = await readFile(logFile, "utf8");
+    expect(contents).toContain("buffered line");
+  });
+
   it("leaves the terminal output unadorned", async () => {
     const dir = await createTmpDir("acp-logger-plain");
     cleanups.push(dir.cleanup);

@@ -246,7 +246,9 @@ export async function fetchModelCatalog(
       lastError = error;
       // The caller stopped waiting: their abort is not a failure to retry.
       const gaveUp = options.signal?.aborted ?? false;
-      if (gaveUp || attempt === maxAttempts - 1 || !isRetryableCatalogError(error)) throw error;
+      if (gaveUp || !isRetryableCatalogError(error)) throw error;
+      // Last attempt: sleeping would only delay the error the caller gets.
+      if (attempt === maxAttempts - 1) break;
       await sleep(retryDelayMs(undefined, attempt), options.signal);
       continue;
     }
@@ -475,10 +477,9 @@ function placeholderFor(id: string): CatalogModel {
 }
 
 function sortModels(models: CatalogModel[]): CatalogModel[] {
-  const rank = new Map(MODEL_GROUP_ORDER.map((group, index) => [group, index]));
-
   return [...models].sort((left, right) => {
-    const byGroup = (rank.get(left.group) ?? 99) - (rank.get(right.group) ?? 99);
+    // `ModelGroup` is closed over `MODEL_GROUP_ORDER`, so indexOf always lands.
+    const byGroup = MODEL_GROUP_ORDER.indexOf(left.group) - MODEL_GROUP_ORDER.indexOf(right.group);
     if (byGroup !== 0) return byGroup;
 
     // Best success rate first, then the busiest models; unknown rates sink.
