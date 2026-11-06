@@ -4,6 +4,11 @@
 
 # acp-pollinations
 
+[![CI](https://github.com/YoannDev90/acp-pollinations/actions/workflows/ci.yml/badge.svg)](https://github.com/YoannDev90/acp-pollinations/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/YoannDev90/acp-pollinations/branch/main/graph/badge.svg)](https://codecov.io/gh/YoannDev90/acp-pollinations)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![node](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](https://nodejs.org)
+
 > A coding agent for your editor, powered by [Pollinations](https://pollinations.ai).
 
 `acp-pollinations` is an [Agent Client Protocol](https://agentclientprotocol.com) (ACP)
