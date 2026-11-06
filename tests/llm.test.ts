@@ -13,7 +13,15 @@ async function runChat(
   baseUrl: string,
   params: Partial<LlmChatParams> & { messages?: LlmMessage[] } = {},
 ): Promise<{ chunks: LlmChunk[]; usage: LlmUsage }> {
-  const generator = llmFor(baseUrl).chat({
+  return runChatWith(llmFor(baseUrl), params);
+}
+
+/** Same as {@link runChat} but on an already-built client (injected fetch). */
+async function runChatWith(
+  llm: PollinationsLlm,
+  params: Partial<LlmChatParams> & { messages?: LlmMessage[] } = {},
+): Promise<{ chunks: LlmChunk[]; usage: LlmUsage }> {
+  const generator = llm.chat({
     messages: params.messages ?? [{ role: "user", content: "hi" }],
     ...(params.tools ? { tools: params.tools } : {}),
     ...(params.model ? { model: params.model } : {}),
@@ -227,5 +235,47 @@ describe("PollinationsLlm", () => {
 
   it("requires an API key", () => {
     expect(() => new PollinationsLlm({ apiKey: "" })).toThrow(LlmError);
+  });
+
+  it("reports the model it is configured with", () => {
+    // The prompt handler logs it and `agentInfo` shows it, so a client that
+    // never sends a per-request model must still be able to name it.
+    expect(llmFor("http://llm.invalid").modelName).toBe("test-model");
+    expect(new PollinationsLlm({ apiKey: "sk_test" }).modelName).not.toBe("");
+  });
+
+  it("suffixes an empty error body with nothing", async () => {
+    const llm = new PollinationsLlm({
+      apiKey: "sk_test",
+      baseUrl: "http://llm.invalid",
+      // A 500 with no body at all: there is nothing to quote back to the user.
+      fetchImpl: () => Promise.resolve(new Response(null, { status: 500 })),
+    });
+
+    await expect(runChatWith(llm)).rejects.toThrow(/500/);
+    await expect(runChatWith(llm)).rejects.not.toThrow(/: $/);
+  });
+
+  it("quotes a non-JSON error body, trimmed to a readable length", async () => {
+    const llm = new PollinationsLlm({
+      apiKey: "sk_test",
+      baseUrl: "http://llm.invalid",
+      // Proxies answer plain text when the upstream is unhappy; a 403 is
+      // final, so the message is raised without a retry round-trip.
+      fetchImpl: () => Promise.resolve(new Response("  upstream exploded  ", { status: 403 })),
+    });
+
+    await expect(runChatWith(llm)).rejects.toThrow(/upstream exploded/);
+  });
+
+  it("drops a whitespace-only error body instead of quoting blanks", async () => {
+    const llm = new PollinationsLlm({
+      apiKey: "sk_test",
+      baseUrl: "http://llm.invalid",
+      fetchImpl: () => Promise.resolve(new Response("\n\t ", { status: 400 })),
+    });
+
+    // The message must not end in a dangling ": " with nothing after it.
+    await expect(runChatWith(llm)).rejects.not.toThrow(/:\s*$/);
   });
 });
