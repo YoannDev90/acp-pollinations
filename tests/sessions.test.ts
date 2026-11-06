@@ -1,10 +1,11 @@
-import { readdir, readFile, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, readFile, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { afterAll, describe, expect, it } from "vitest";
 
 import {
   MAX_PERSISTED_SESSIONS,
+  SESSION_RECORD_VERSION,
   createSessionStore,
 } from "../src/sessions/index.js";
 import type { PersistedSession } from "../src/sessions/index.js";
@@ -106,28 +107,153 @@ describe("createSessionStore", () => {
     expect(await createSessionStore(dir).load("sess_abc123")).toBeNull();
   });
 
-  it("rejects a transcript whose entries are not well-formed", async () => {
+  it("rejects a record that fails any schema check", async () => {
     const dir = await withStoreDir();
     const store = createSessionStore(dir);
-    // Establish the directory, then write the malformed records directly.
+    // The directory must exist before the malformed records land in it.
     await store.save(record({ id: "sess_seed" }));
 
+    /** Writes `body` as a session file; every case is a fresh record. */
+    const write = async (id: string, body: Record<string, unknown>): Promise<void> => {
+      await writeFile(
+        join(dir, `${id}.json`),
+        JSON.stringify({ version: SESSION_RECORD_VERSION, ...record({ id }), ...body }),
+        "utf8",
+      );
+      expect(await store.load(id)).toBeNull();
+    };
+
+    // Not an object at all.
+    await writeFile(join(dir, "sess_scalar.json"), JSON.stringify(42), "utf8");
+    expect(await store.load("sess_scalar")).toBeNull();
+
+    await write("sess_bad_id", { id: "../../etc/passwd" });
+    await write("sess_empty_cwd", { cwd: "" });
+    await write("sess_empty_model", { model: "" });
+    // `roots` must be a non-empty array of strings.
+    await write("sess_roots_scalar", { roots: "nope" });
+    await write("sess_roots_empty", { roots: [] });
+    await write("sess_roots_item", { roots: [42] });
+    await write("sess_history_scalar", { history: "nope" });
+    await write("sess_history_item", { history: [42] });
+    await write("sess_bad_role", { history: [{ role: "narrator", content: "hi" }] });
+    await write("sess_bad_content", { history: [{ role: "user", content: 42 }] });
+    // `tool_calls` must be an array of well-formed calls; `tool_call_id` and
+    // `reasoning_content` must be strings when present.
+    await write("sess_calls_scalar", {
+      history: [{ role: "assistant", content: null, tool_calls: "nope" }],
+    });
+    await write("sess_call_scalar", {
+      history: [{ role: "assistant", content: null, tool_calls: [null] }],
+    });
+    await write("sess_call_fields", {
+      history: [{ role: "assistant", content: null, tool_calls: [{ id: "call_1" }] }],
+    });
+    await write("sess_call_bad", {
+      history: [{ role: "assistant", content: null, tool_calls: [{}] }],
+    });
+    await write("sess_bad_tool_id", { history: [{ role: "tool", content: "x", tool_call_id: 42 }] });
+    await write("sess_bad_reasoning", {
+      history: [{ role: "assistant", content: "x", reasoning_content: 42 }],
+    });
+  });
+
+  it("keeps optional fields optional and clamps the numeric ones", async () => {
+    const dir = await withStoreDir();
+    const store = createSessionStore(dir);
+    await store.save(record({ id: "sess_seed" }));
+
+    const full = record();
     await writeFile(
-      join(dir, "sess_bad_role.json"),
+      join(dir, "sess_optional.json"),
       JSON.stringify({
-        ...record({ id: "sess_bad_role" }),
-        history: [{ role: "narrator", content: "hi" }],
+        version: SESSION_RECORD_VERSION,
+        ...full,
+        id: "sess_optional",
+        allowedTools: "not-an-array",
+        messageCounter: "two",
+        lastPromptTokens: -5,
+        title: "",
+        reasoningLevel: "",
+        mode: "",
       }),
       "utf8",
     );
-    expect(await store.load("sess_bad_role")).toBeNull();
+
+    const loaded = await store.load("sess_optional");
+    // Absent or hostile optionals degrade to their defaults instead of
+    // failing the load: the transcript itself is intact.
+    expect(loaded?.allowedTools).toEqual([]);
+    expect(loaded?.messageCounter).toBe(0);
+    expect(loaded?.lastPromptTokens).toBe(0);
+    expect(loaded?.title).toBeUndefined();
+    expect(loaded?.reasoningLevel).toBeUndefined();
+    expect(loaded?.mode).toBeUndefined();
+    // An empty `tool_calls` array is dropped rather than kept as a no-op.
+    expect(loaded?.history).toEqual(full.history);
+  });
+
+  it("drops an empty tool_calls array instead of keeping it", async () => {
+    const dir = await withStoreDir();
+    const store = createSessionStore(dir);
+    await store.save(record({ id: "sess_seed" }));
 
     await writeFile(
-      join(dir, "sess_bad_content.json"),
-      JSON.stringify({ ...record({ id: "sess_bad_content" }), history: [{ role: "user", content: 42 }] }),
+      join(dir, "sess_no_calls.json"),
+      JSON.stringify({
+        version: SESSION_RECORD_VERSION,
+        ...record({ id: "sess_no_calls" }),
+        history: [{ role: "assistant", content: "hi", tool_calls: [] }],
+      }),
       "utf8",
     );
-    expect(await store.load("sess_bad_content")).toBeNull();
+
+    const loaded = await store.load("sess_no_calls");
+    expect(loaded?.history[0]).toEqual({ role: "assistant", content: "hi" });
+  });
+
+  it("keeps the descriptive fields and reasoning when they are set", async () => {
+    const dir = await withStoreDir();
+    const store = createSessionStore(dir);
+    await store.save(
+      record({
+        id: "sess_described",
+        title: "Fix the parser",
+        reasoningLevel: "high",
+        mode: "plan",
+        history: [
+          { role: "system", content: "system prompt" },
+          { role: "assistant", content: "hi", reasoning_content: null },
+        ],
+      }),
+    );
+
+    const loaded = await store.load("sess_described");
+    expect(loaded?.title).toBe("Fix the parser");
+    expect(loaded?.reasoningLevel).toBe("high");
+    expect(loaded?.mode).toBe("plan");
+    expect(loaded?.history[1]).toEqual({
+      role: "assistant",
+      content: "hi",
+      reasoning_content: null,
+    });
+  });
+
+  it("gives up pruning when the directory cannot be listed", async () => {
+    if (process.getuid?.() === 0) return; // root ignores the mode bits
+    const dir = await withStoreDir();
+    await mkdir(dir, { recursive: true });
+    // Write and execute but no read: saves still land, the listing does not.
+    await chmod(dir, 0o333);
+
+    try {
+      const store = createSessionStore(dir);
+      // The save itself succeeds; only `prune`'s readdir fails, and that must
+      // not take the save down with it.
+      await expect(store.save(record())).resolves.toBeUndefined();
+    } finally {
+      await chmod(dir, 0o755);
+    }
   });
 
   it("leaves no temporary file behind", async () => {
@@ -163,6 +289,37 @@ describe("createSessionStore", () => {
 
     await expect(store.save(record())).resolves.toBeUndefined();
     expect(await store.load("sess_abc123")).toBeNull();
+    expect(await store.remove("sess_abc123")).toBe(false);
+    expect(await store.list()).toEqual({ sessions: [] });
+  });
+
+  it("ignores an unsafe id on write and delete", async () => {
+    const dir = await withStoreDir();
+    const store = createSessionStore(dir);
+    await store.save(record({ id: "sess_seed" }));
+
+    // A traversal id must not create a file outside the store, nor delete one.
+    await expect(store.save(record({ id: "../escaped" }))).resolves.toBeUndefined();
+    expect(await store.remove("../escaped")).toBe(false);
+    expect(await readdir(dir)).toEqual(["sess_seed.json"]);
+  });
+
+  it("lists nothing when the directory was never created", async () => {
+    const store = createSessionStore(await withStoreDir());
+
+    expect(await store.list()).toEqual({ sessions: [] });
+  });
+
+  it("skips files that are not session records", async () => {
+    const dir = await withStoreDir();
+    const store = createSessionStore(dir);
+    await store.save(record({ id: "sess_real" }));
+    // A stray text file and a corrupt record are both unlistable.
+    await writeFile(join(dir, "notes.txt"), "scratch", "utf8");
+    await writeFile(join(dir, "sess_corrupt.json"), "{ not json", "utf8");
+
+    const { sessions } = await store.list();
+    expect(sessions.map((entry) => entry.id)).toEqual(["sess_real"]);
   });
 
   it("propagates a write failure so the caller can decide", async () => {
