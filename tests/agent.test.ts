@@ -520,7 +520,7 @@ describe("model picker", () => {
   });
 });
 
-describe("session/load", () => {
+describe("session restore (load and resume)", () => {
   /**
    * Runs a conversation on one agent instance, then opens a brand-new instance
    * over the same sessions directory — the state a client sees after
@@ -670,6 +670,108 @@ describe("session/load", () => {
         ).rejects.toMatchObject({ code: -32002 });
       },
     );
+  });
+
+  it("resumes a session that is still live without touching disk", async () => {
+    await withAgent([{ text: "unused" }], {}, async ({ harness, server }) => {
+      const response = await harness.ctx.request("session/resume", {
+        sessionId: harness.session.sessionId,
+        cwd: harness.cwd,
+        mcpServers: [],
+      });
+
+      // Warm in this process: resume returns the picker without replaying or
+      // reloading anything.
+      expect((response.configOptions ?? [])[0]?.currentValue).toBe("test-model");
+      expect(server.requests).toHaveLength(0);
+    });
+  });
+
+  it("resumes a stored session after a restart, restoring its settings", async () => {
+    await withRestartedAgent(
+      [{ text: "first" }],
+      async ({ sessionId, server, harness }) => {
+        const response = await harness.ctx.request("session/resume", {
+          sessionId,
+          cwd: harness.cwd,
+          mcpServers: [],
+        });
+
+        expect((response.configOptions ?? [])[0]?.currentValue).toBe("test-model");
+
+        // Resume skips the replay, but the transcript is still in front of
+        // the model for the next turn.
+        const before = server.requests.length;
+        await harness.ctx.request("session/prompt", {
+          sessionId,
+          prompt: [{ type: "text", text: "continue" }],
+        });
+        const texts = (server.requests[before]?.messages ?? []).map((m) =>
+          contentText(m.content),
+        );
+        expect(texts).toContain("the opening line");
+        expect(texts).toContain("continue");
+      },
+    );
+  });
+
+  it("rejects a resume for a session id it has never seen", async () => {
+    await withRestartedAgent([{ text: "first" }], async ({ harness }) => {
+      await expect(
+        harness.ctx.request("session/resume", {
+          sessionId: "sess_never_existed",
+          cwd: harness.cwd,
+          mcpServers: [],
+        }),
+      ).rejects.toMatchObject({ code: -32002 });
+    });
+  });
+
+  it("rejects a resume whose cwd is not an absolute path", async () => {
+    await withRestartedAgent([{ text: "first" }], async ({ harness }) => {
+      await expect(
+        harness.ctx.request("session/resume", {
+          sessionId: "sess_any",
+          cwd: "relative/path",
+          mcpServers: [],
+        }),
+      ).rejects.toMatchObject({ code: -32602 });
+    });
+  });
+
+  it("rejects a resume whose additional directory is relative", async () => {
+    await withRestartedAgent([{ text: "first" }], async ({ sessionId, harness }) => {
+      await expect(
+        harness.ctx.request("session/resume", {
+          sessionId,
+          cwd: harness.cwd,
+          additionalDirectories: ["relative/dir"],
+          mcpServers: [],
+        }),
+      ).rejects.toMatchObject({ code: -32602 });
+    });
+  });
+
+  it("closes a session, which forgets it in memory but keeps the record", async () => {
+    const state = await createTmpDir("acp-close");
+    cleanups.push(state.cleanup);
+
+    await withAgent([{ text: "persisted" }], { sessionsDir: state.path }, async ({ harness }) => {
+      const sessionId = harness.session.sessionId;
+      await harness.prompt("remember me");
+
+      const response = await harness.ctx.request("session/close", { sessionId });
+      expect(response).toEqual({});
+
+      // Close is not delete: the thread was persisted before it closed, so a
+      // client that reconnects can load it back.
+      const loaded = await harness.ctx.request("session/load", {
+        sessionId,
+        cwd: harness.cwd,
+        mcpServers: [],
+      });
+      expect((loaded.configOptions ?? [])[0]?.currentValue).toBe("test-model");
+    });
   });
 });
 
@@ -908,6 +1010,10 @@ describe("slash commands", () => {
 
   it("switches mode and reports the change to the client", async () => {
     await withAgent([{ text: "unused" }], {}, async ({ harness }) => {
+      // No argument: the command reports rather than switches.
+      await harness.prompt("/mode");
+      expect(agentText(harness.updates)).toContain("Current mode: build");
+
       await harness.prompt("/mode plan");
 
       expect(agentText(harness.updates)).toContain("Switched mode to plan.");
@@ -923,6 +1029,10 @@ describe("slash commands", () => {
 
   it("switches reasoning effort and republishes the picker", async () => {
     await withAgent([{ text: "unused" }], {}, async ({ harness, server }) => {
+      // No argument reports the current level instead of changing it.
+      await harness.prompt("/reasoning");
+      expect(agentText(harness.updates)).toContain("Current reasoning level: medium");
+
       await harness.prompt("/reasoning high");
 
       expect(agentText(harness.updates)).toContain("Switched reasoning level to high.");
