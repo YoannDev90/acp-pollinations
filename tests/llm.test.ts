@@ -278,4 +278,302 @@ describe("PollinationsLlm", () => {
     // The message must not end in a dangling ": " with nothing after it.
     await expect(runChatWith(llm)).rejects.not.toThrow(/:\s*$/);
   });
+
+  it("rejects a 200 that carries no body", async () => {
+    const llm = new PollinationsLlm({
+      apiKey: "sk_test",
+      baseUrl: "http://llm.invalid",
+      // A 200 with a null body would otherwise fail later, inside the stream
+      // reader, with a far less diagnosable message.
+      fetchImpl: () => Promise.resolve(new Response(null, { status: 200 })),
+    });
+
+    await expect(runChatWith(llm)).rejects.toThrow(/empty response body/);
+  });
+
+  it("times out a request that never answers", async () => {
+    const llm = new PollinationsLlm({
+      apiKey: "sk_test",
+      baseUrl: "http://llm.invalid",
+      // The per-request budget is the only thing that can end this fetch:
+      // no caller signal is involved, so the timeout callback must fire.
+      timeoutMs: 5,
+      fetchImpl: (_input, init) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("timed out", "TimeoutError")),
+          );
+        }),
+    });
+
+    await expect(runChatWith(llm)).rejects.toThrow();
+  });
+
+  it("retries a rate-limited request and streams the recovered turn", async () => {
+    const stream = new Response(
+      'data: {"choices":[{"delta":{"content":"recovered"}}]}\n\ndata: [DONE]\n\n',
+      { status: 200, headers: { "Content-Type": "text/event-stream" } },
+    );
+    let calls = 0;
+    const llm = new PollinationsLlm({
+      apiKey: "sk_test",
+      baseUrl: "http://llm.invalid",
+      fetchImpl: () => {
+        calls += 1;
+        // Retry-After zeroes the backoff, so the retry path runs at full
+        // speed instead of sleeping a second for nothing.
+        if (calls === 1) {
+          return Promise.resolve(
+            new Response("rate limit", { status: 429, headers: { "Retry-After": "0" } }),
+          );
+        }
+        return Promise.resolve(stream);
+      },
+    });
+
+    const { chunks } = await runChatWith(llm);
+
+    expect(calls).toBe(2);
+    expect(textOf(chunks)).toBe("recovered");
+  });
+
+  it("retries once when the transport itself fails", async () => {
+    const stream = new Response(
+      'data: {"choices":[{"delta":{"content":"after the drop"}}]}\n\ndata: [DONE]\n\n',
+      { status: 200, headers: { "Content-Type": "text/event-stream" } },
+    );
+    let calls = 0;
+    const llm = new PollinationsLlm({
+      apiKey: "sk_test",
+      baseUrl: "http://llm.invalid",
+      fetchImpl: () => {
+        calls += 1;
+        // A socket-level failure carries no response, so the retry delay
+        // falls back to the exponential backoff rather than Retry-After.
+        if (calls === 1) return Promise.reject(new TypeError("fetch failed"));
+        return Promise.resolve(stream);
+      },
+    });
+
+    const { chunks } = await runChatWith(llm);
+
+    expect(calls).toBe(2);
+    expect(textOf(chunks)).toBe("after the drop");
+  }, 10_000);
+
+  it("salvages a trailing frame when the stream ends without [DONE]", async () => {
+    const stream = new Response(
+      // A proxy that cuts the connection before the frame's blank line: the
+      // payload only arrives through the parser's flush, not the read loop.
+      'data: {"choices":[{"delta":{"content":"cut off"}}]}',
+      { status: 200, headers: { "Content-Type": "text/event-stream" } },
+    );
+    const llm = new PollinationsLlm({
+      apiKey: "sk_test",
+      baseUrl: "http://llm.invalid",
+      fetchImpl: () => Promise.resolve(stream),
+    });
+
+    const { chunks, usage } = await runChatWith(llm);
+
+    expect(textOf(chunks)).toBe("cut off");
+    expect(usage).toEqual({ promptTokens: 0, completionTokens: 0, totalTokens: 0 });
+  });
+
+  it("does not drop the reasoning effort for an unrelated status", async () => {
+    const llm = new PollinationsLlm({
+      apiKey: "sk_test",
+      baseUrl: "http://llm.invalid",
+      // 403 naming "reasoning" is a permissions problem, not the model
+      // refusing the knob, so the effort must survive and the error surface.
+      fetchImpl: () =>
+        Promise.resolve(new Response('{"error":"reasoning is forbidden"}', { status: 403 })),
+    });
+
+    await expect(runChatWith(llm, { reasoningEffort: "high" })).rejects.toThrow(
+      /reasoning is forbidden/,
+    );
+  });
+
+  it("retries an LlmError that carries a retryable status but no body", async () => {
+    const stream = new Response(
+      'data: {"choices":[{"delta":{"content":"second try"}}]}\n\ndata: [DONE]\n\n',
+      { status: 200, headers: { "Content-Type": "text/event-stream" } },
+    );
+    let calls = 0;
+    const llm = new PollinationsLlm({
+      apiKey: "sk_test",
+      baseUrl: "http://llm.invalid",
+      fetchImpl: () => {
+        calls += 1;
+        // A transport wrapper can raise an LlmError with a status and no
+        // body at all; the classifier must still read the status.
+        if (calls === 1) return Promise.reject(new LlmError("upstream said 429", 429));
+        return Promise.resolve(stream);
+      },
+    });
+
+    const { chunks } = await runChatWith(llm);
+
+    expect(calls).toBe(2);
+    expect(textOf(chunks)).toBe("second try");
+  }, 10_000);
+
+  it("gives up on a thrown value that is not an error", async () => {
+    const llm = new PollinationsLlm({
+      apiKey: "sk_test",
+      baseUrl: "http://llm.invalid",
+      // Nothing to inspect and nothing to match, so retrying would only
+      // repeat the same opaque failure. The non-Error rejection is the point
+      // of the test, hence the disable.
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
+      fetchImpl: () => Promise.reject("socket exploded"),
+    });
+
+    await expect(runChatWith(llm)).rejects.toBe("socket exploded");
+  });
+
+  it("quotes nothing when the error body cannot be read", async () => {
+    // The connection dies between the status line and the body: reading it
+    // rejects, and the empty fallback keeps the failure raising anyway.
+    const broken = new ReadableStream({
+      start(controller) {
+        controller.error(new Error("body gone"));
+      },
+    });
+    const llm = new PollinationsLlm({
+      apiKey: "sk_test",
+      baseUrl: "http://llm.invalid",
+      fetchImpl: () => Promise.resolve(new Response(broken, { status: 400 })),
+    });
+
+    await expect(runChatWith(llm)).rejects.toThrow(/400/);
+  });
+
+  it("adds no suffix when the JSON error carries no message", async () => {
+    const llm = new PollinationsLlm({
+      apiKey: "sk_test",
+      baseUrl: "http://llm.invalid",
+      fetchImpl: () =>
+        Promise.resolve(new Response('{"error":{}}', { status: 400 })),
+    });
+
+    // Well-formed JSON with nothing to say: the raw body is not quoted
+    // either, so the user sees only the status.
+    await expect(runChatWith(llm)).rejects.toThrow(/^Pollinations request failed \(400/);
+    await expect(runChatWith(llm)).rejects.not.toThrow(/\{$/);
+  });
+
+  it("reads a bare string error field the same as a message object", async () => {
+    const llm = new PollinationsLlm({
+      apiKey: "sk_test",
+      baseUrl: "http://llm.invalid",
+      // Some upstreams send `{"error": "..."}` instead of the OpenAI shape.
+      fetchImpl: () =>
+        Promise.resolve(new Response('{"error":"quota exhausted"}', { status: 400 })),
+    });
+
+    await expect(runChatWith(llm)).rejects.toThrow(/quota exhausted/);
+  });
+
+  it("fills in missing usage counters with zeros", async () => {
+    const stream = new Response(
+      // A final frame that reports usage without the token breakdown: the
+      // totals must still add up instead of becoming NaN.
+      'data: {"usage":{"total_tokens":9},"choices":[{"delta":{"content":"counted"}}]}\n\n' +
+        "data: [DONE]\n\n",
+      { status: 200, headers: { "Content-Type": "text/event-stream" } },
+    );
+    const llm = new PollinationsLlm({
+      apiKey: "sk_test",
+      baseUrl: "http://llm.invalid",
+      fetchImpl: () => Promise.resolve(stream),
+    });
+
+    const { usage } = await runChatWith(llm);
+
+    expect(usage).toEqual({ promptTokens: 0, completionTokens: 0, totalTokens: 9 });
+  });
+
+  it("keeps tool-call deltas that omit the optional fields", async () => {
+    const stream = new Response(
+      // Index-only call: no id and no function block, so both spreads stay
+      // empty rather than injecting undefined keys into the chunk.
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":3}]}}]}\n\n' +
+        // And a call with no index at all: it defaults to 0 so the assembler
+        // still groups it instead of keying on undefined.
+        'data: {"choices":[{"delta":{"tool_calls":[{"id":"call_x","function":{"name":"f"}}]}}]}\n\n' +
+        "data: [DONE]\n\n",
+      { status: 200, headers: { "Content-Type": "text/event-stream" } },
+    );
+    const llm = new PollinationsLlm({
+      apiKey: "sk_test",
+      baseUrl: "http://llm.invalid",
+      fetchImpl: () => Promise.resolve(stream),
+    });
+
+    const { chunks } = await runChatWith(llm);
+
+    expect(chunks[0]?.toolCalls).toEqual([{ index: 3 }]);
+    expect(chunks[1]?.toolCalls).toEqual([{ index: 0, id: "call_x", name: "f" }]);
+  });
+
+  it("skips a delta that carries nothing to surface", async () => {
+    const stream = new Response(
+      // A role-only delta yields no chunk: the agent must not see an empty
+      // assistant message.
+      'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n' +
+        'data: {"choices":[{"delta":{"content":"now"} }]}\n\n' +
+        "data: [DONE]\n\n",
+      { status: 200, headers: { "Content-Type": "text/event-stream" } },
+    );
+    const llm = new PollinationsLlm({
+      apiKey: "sk_test",
+      baseUrl: "http://llm.invalid",
+      fetchImpl: () => Promise.resolve(stream),
+    });
+
+    const { chunks } = await runChatWith(llm);
+
+    expect(textOf(chunks)).toBe("now");
+    expect(chunks).toHaveLength(1);
+  });
+
+  it("drains the sentinel from the flush as well", async () => {
+    const stream = new Response(
+      // Nothing is frame-terminated at the end: [DONE] sits in the parser's
+      // trailing buffer when the connection closes.
+      'data: {"choices":[{"delta":{"content":"tail"}}]}\n\n' +
+        "data: [DONE]",
+      { status: 200, headers: { "Content-Type": "text/event-stream" } },
+    );
+    const llm = new PollinationsLlm({
+      apiKey: "sk_test",
+      baseUrl: "http://llm.invalid",
+      fetchImpl: () => Promise.resolve(stream),
+    });
+
+    const { chunks, usage } = await runChatWith(llm);
+
+    expect(textOf(chunks)).toBe("tail");
+    expect(usage).toEqual({ promptTokens: 0, completionTokens: 0, totalTokens: 0 });
+  });
+
+  it("drains a trailing usage frame that never saw its blank line", async () => {
+    const stream = new Response(
+      'data: {"choices":[{"delta":{"content":"tail"}}]}\n\n' +
+        'data: {"usage":{"prompt_tokens":4,"completion_tokens":2}}',
+      { status: 200, headers: { "Content-Type": "text/event-stream" } },
+    );
+    const llm = new PollinationsLlm({
+      apiKey: "sk_test",
+      baseUrl: "http://llm.invalid",
+      fetchImpl: () => Promise.resolve(stream),
+    });
+
+    const { chunks, usage } = await runChatWith(llm);
+
+    expect(textOf(chunks)).toBe("tail");
+    expect(usage).toEqual({ promptTokens: 4, completionTokens: 2, totalTokens: 6 });
+  });
 });

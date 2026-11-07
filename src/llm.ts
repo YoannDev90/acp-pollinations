@@ -213,6 +213,9 @@ export class PollinationsLlm {
         for (;;) {
           const { value, done } = await reader.read();
           if (done) break;
+          // TextDecoderStream never emits an empty chunk, so this is dead
+          // defensive code; ignored rather than tested into reachability.
+          /* v8 ignore next */
           if (!value) continue;
 
           for (const event of parser.push(value)) {
