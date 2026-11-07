@@ -52,6 +52,8 @@ export type Harness = {
     terminal?: boolean;
     session?: ClientSessionCapabilities;
   };
+  /** Set when the scenario opens its own session; see `BaseOptions`. */
+  skipSession?: boolean;
   /** Sends a prompt and drains updates until the turn stops. */
   prompt: (input: string | ContentBlock[]) => Promise<PromptResponse>;
   /** Waits until `predicate` holds over the streamed updates. */
@@ -66,6 +68,12 @@ type BaseOptions = {
     session?: ClientSessionCapabilities;
   };
   answerPermission?: (request: RequestPermissionRequest) => string | null;
+  /**
+   * Leave `session/new` to the test: `runScenario` normally opens one before
+   * the scenario runs, which is exactly what a test asserting on `session/new`
+   * itself (or on an agent that must refuse it) cannot have.
+   */
+  skipSession?: boolean;
 };
 
 type ClientAppWithHarness = {
@@ -175,6 +183,7 @@ function buildClientApp(options: BaseOptions): ClientAppWithHarness {
     terminalCommands: [],
     virtualFiles: new Map(),
     capabilities: options.capabilities,
+    skipSession: options.skipSession,
     answerPermission: options.answerPermission,
     prompt: async () => {
       throw new Error("prompt() is only available inside a scenario");
@@ -268,6 +277,12 @@ async function runScenario(
       ...(harness.capabilities?.session ? { session: harness.capabilities.session } : {}),
     },
   });
+
+  if (harness.skipSession) {
+    // The scenario drives `session/new` (or its refusal) itself.
+    await op(harness);
+    return;
+  }
 
   await ctx.buildSession(harness.cwd).withSession(async (session) => {
     harness.session = session;

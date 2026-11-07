@@ -60,6 +60,44 @@ async function withAgent(
   });
 }
 
+/**
+ * Runs `op` against an agent that has not opened a session yet.
+ *
+ * The scenario owns `session/new` itself, which is what a test needs when the
+ * subject is that request — or the refusal it produces without an API key.
+ */
+async function withUnopenedSession(
+  overrides: Partial<AgentConfig>,
+  op: (args: { cwd: string; harness: Harness }) => Promise<void>,
+): Promise<void> {
+  const server = await startFakeLlmServer([]);
+  servers.push(server);
+
+  const workspace = await createTmpDir("acp-raw");
+  cleanups.push(workspace.cleanup);
+
+  const config: AgentConfig = {
+    apiKey: "sk_test",
+    baseUrl: server.baseUrl,
+    model: "test-model",
+    maxTurnRequests: 8,
+    permissionMode: "ask",
+    compactionThresholdTokens: 0,
+    ...overrides,
+  };
+
+  const agent = createPollinationsAgent({
+    config,
+    ...(config.apiKey
+      ? { llm: new PollinationsLlm({ apiKey: config.apiKey, baseUrl: config.baseUrl, model: config.model }) }
+      : {}),
+  });
+
+  await withInProcessClient(agent, { cwd: workspace.path, skipSession: true }, async (harness) => {
+    await op({ cwd: workspace.path, harness });
+  });
+}
+
 /** Collects the agent's streamed text from the update log. */
 function agentText(updates: unknown[]): string {
   return updates
@@ -262,6 +300,70 @@ describe("createPollinationsAgent", () => {
           prompt: [{ type: "text", text: "hi" }],
         }),
       ).rejects.toMatchObject({ code: -32002 });
+    });
+  });
+});
+
+describe("session setup validation", () => {
+  it("rejects a session/new whose cwd is missing or relative", async () => {
+    await withUnopenedSession({}, async ({ cwd, harness }) => {
+      await expect(
+        harness.ctx.request("session/new", { cwd: "", mcpServers: [] }),
+      ).rejects.toMatchObject({ code: -32602 });
+
+      await expect(
+        harness.ctx.request("session/new", { cwd: "relative/path", mcpServers: [] }),
+      ).rejects.toMatchObject({ code: -32602 });
+
+      // The happy path still works afterwards: the refusals changed no state.
+      const ok = await harness.ctx.request("session/new", { cwd, mcpServers: [] });
+      expect(ok.sessionId).toMatch(/^sess_/);
+    });
+  });
+
+  it("rejects a session/new whose additional directory is relative", async () => {
+    await withUnopenedSession({}, async ({ cwd, harness }) => {
+      await expect(
+        harness.ctx.request("session/new", {
+          cwd,
+          additionalDirectories: ["relative/dir"],
+          mcpServers: [],
+        }),
+      ).rejects.toMatchObject({ code: -32602 });
+
+      // An absolute entry is accepted and becomes a root of the session.
+      const ok = await harness.ctx.request("session/new", {
+        cwd,
+        additionalDirectories: [cwd],
+        mcpServers: [],
+      });
+      expect(ok.sessionId).toMatch(/^sess_/);
+    });
+  });
+
+  it("refuses session/new, load, and resume without an API key", async () => {
+    await withUnopenedSession({ apiKey: "" }, async ({ cwd, harness }) => {
+      // Without a key the agent must still answer — with a reason, not a crash.
+      await expect(
+        harness.ctx.request("session/new", { cwd, mcpServers: [] }),
+      ).rejects.toMatchObject({ code: -32000 });
+
+      await expect(
+        harness.ctx.request("session/load", { sessionId: "sess_x", cwd, mcpServers: [] }),
+      ).rejects.toMatchObject({ code: -32000 });
+
+      await expect(
+        harness.ctx.request("session/resume", { sessionId: "sess_x", cwd, mcpServers: [] }),
+      ).rejects.toMatchObject({ code: -32000 });
+    });
+  });
+
+  it("answers authenticate with an empty result", async () => {
+    await withUnopenedSession({}, async ({ harness }) => {
+      // The key comes from the environment, so the ACP auth flow is a no-op
+      // that exists to be answerable rather than an unknown method.
+      const response = await harness.ctx.request("authenticate", { methodId: "pollinations" });
+      expect(response).toEqual({});
     });
   });
 });
