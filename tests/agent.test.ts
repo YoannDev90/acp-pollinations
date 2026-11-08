@@ -148,6 +148,44 @@ describe("createPollinationsAgent", () => {
     });
   });
 
+  it("streams the model's reasoning as thought chunks", async () => {
+    await withAgent([{ reasoning: "let me think", text: "the answer" }], {}, async ({ harness }) => {
+      const response = await harness.prompt("think hard");
+
+      expect(response.stopReason).toBe("end_turn");
+      // Reasoning is surfaced separately from the answer so a client can fold
+      // it into a collapsible section rather than mixing it into the reply.
+      const thoughts = harness.updates
+        .filter((u) => (u as { sessionUpdate?: string }).sessionUpdate === "agent_thought_chunk")
+        .map((u) => (u as { content: { text?: string } }).content.text ?? "");
+      expect(thoughts.join("")).toBe("let me think");
+      expect(agentText(harness.updates)).toBe("the answer");
+    });
+  });
+
+  it("attaches the terminal to a bash call run through the client", async () => {
+    await withAgent(
+      [
+        { toolCalls: [{ name: "bash", arguments: JSON.stringify({ command: "echo hi" }) }] },
+        { text: "done" },
+      ],
+      {},
+      async ({ harness }) => {
+        await harness.prompt("run echo");
+
+        const update = harness.updates.find(
+          (entry) =>
+            (entry as { sessionUpdate?: string }).sessionUpdate === "tool_call_update" &&
+            (entry as { status?: string }).status === "completed",
+        ) as { content?: Array<{ type?: string }> } | undefined;
+
+        // The client owns the terminal, so the update points at it instead of
+        // pretending the output belongs to a plain text block.
+        expect(update?.content?.some((block) => block.type === "terminal")).toBe(true);
+      },
+    );
+  });
+
   it("runs a read-only tool without asking permission", async () => {
     await withAgent(
       [{ toolCalls: [{ name: "read_file", arguments: JSON.stringify({ path: "notes.txt" }) }] }, { text: "done" }],
