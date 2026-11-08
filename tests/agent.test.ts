@@ -24,6 +24,12 @@ afterAll(async () => {
 
 type OpArgs = { cwd: string; server: FakeLlmServer; harness: Harness; agent: PollinationsAgentApp };
 
+/** Harness-level knobs {@link withAgent} forwards to the in-process client. */
+type ClientKnobs = {
+  permissionUnsupported?: boolean;
+  capabilities?: { fs?: boolean; terminal?: boolean; session?: ClientSessionCapabilities };
+};
+
 /**
  * Boots a fake endpoint, a scratch workspace, and an agent, then runs `op`
  * against an in-process ACP client connected to that agent.
@@ -32,6 +38,7 @@ async function withAgent(
   turns: FakeTurn[],
   overrides: Partial<AgentConfig>,
   op: (args: OpArgs) => Promise<void>,
+  clientOptions: ClientKnobs = {},
 ): Promise<void> {
   const server = await startFakeLlmServer(turns);
   servers.push(server);
@@ -55,7 +62,7 @@ async function withAgent(
     llm: new PollinationsLlm({ apiKey: config.apiKey, baseUrl: config.baseUrl, model: config.model }),
   });
 
-  await withInProcessClient(agent, { cwd: workspace.path }, async (harness) => {
+  await withInProcessClient(agent, { cwd: workspace.path, ...clientOptions }, async (harness) => {
     await op({ cwd: workspace.path, server, harness, agent });
   });
 }
@@ -239,6 +246,80 @@ describe("createPollinationsAgent", () => {
         );
         expect(toolUpdate).toBeTruthy();
       },
+    );
+  });
+
+  it("remembers allow-always for the rest of the session", async () => {
+    await withAgent(
+      [
+        {
+          toolCalls: [
+            { name: "write_file", arguments: JSON.stringify({ path: "once.txt", content: "1" }) },
+          ],
+        },
+        {
+          toolCalls: [
+            { name: "write_file", arguments: JSON.stringify({ path: "twice.txt", content: "2" }) },
+          ],
+        },
+        { text: "done" },
+      ],
+      {},
+      async ({ cwd, harness }) => {
+        harness.answerPermission = () => "allow-always";
+
+        await harness.prompt("write both");
+
+        // The first call asked; the second found the tool on the allowlist.
+        expect(harness.permissionRequests).toHaveLength(1);
+        expect(await readFile(join(cwd, "once.txt"), "utf8")).toBe("1");
+        expect(await readFile(join(cwd, "twice.txt"), "utf8")).toBe("2");
+      },
+    );
+  });
+
+  it("treats a cancelled permission prompt as a refusal", async () => {
+    await withAgent(
+      [
+        {
+          toolCalls: [
+            { name: "write_file", arguments: JSON.stringify({ path: "cancelled.txt", content: "x" }) },
+          ],
+        },
+        { text: "understood" },
+      ],
+      {},
+      async ({ cwd, harness }) => {
+        // The client dismissed the prompt instead of choosing an option.
+        harness.answerPermission = () => null;
+
+        await harness.prompt("write cancelled.txt");
+
+        expect(harness.permissionRequests).toHaveLength(1);
+        await expect(readFile(join(cwd, "cancelled.txt"), "utf8")).rejects.toThrow();
+      },
+    );
+  });
+
+  it("denies the tool when the client does not implement permission prompts", async () => {
+    await withAgent(
+      [
+        {
+          toolCalls: [
+            { name: "write_file", arguments: JSON.stringify({ path: "unsupported.txt", content: "x" }) },
+          ],
+        },
+        { text: "understood" },
+      ],
+      {},
+      async ({ cwd, harness }) => {
+        await harness.prompt("write unsupported.txt");
+
+        // An unanswerable request is not an approval.
+        expect(harness.permissionRequests).toHaveLength(0);
+        await expect(readFile(join(cwd, "unsupported.txt"), "utf8")).rejects.toThrow();
+      },
+      { permissionUnsupported: true },
     );
   });
 

@@ -74,6 +74,11 @@ type BaseOptions = {
    * itself (or on an agent that must refuse it) cannot have.
    */
   skipSession?: boolean;
+  /**
+   * Do not register the `session/request_permission` handler, so the request
+   * fails the way a client that does not implement the method would.
+   */
+  permissionUnsupported?: boolean;
 };
 
 type ClientAppWithHarness = {
@@ -193,8 +198,10 @@ function buildClientApp(options: BaseOptions): ClientAppWithHarness {
     },
   };
 
-  const app = createClientApp({ name: "test-client" })
-    .onRequest(methods.client.session.requestPermission, ({ params }) => {
+  const app = createClientApp({ name: "test-client" });
+
+  if (!options.permissionUnsupported) {
+    app.onRequest(methods.client.session.requestPermission, ({ params }) => {
       harness.permissionRequests.push(params);
       const answer = harness.answerPermission
         ? harness.answerPermission(params)
@@ -203,7 +210,10 @@ function buildClientApp(options: BaseOptions): ClientAppWithHarness {
       return answer === null
         ? { outcome: { outcome: "cancelled" } }
         : { outcome: { outcome: "selected", optionId: answer } };
-    })
+    });
+  }
+
+  app
     .onRequest(methods.client.fs.readTextFile, async ({ params }) => {
       const virtual = harness.virtualFiles.get(params.path);
       if (virtual !== undefined) return { content: sliceLines(virtual, params.line, params.limit) };
