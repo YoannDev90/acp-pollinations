@@ -163,6 +163,36 @@ describe("createPollinationsAgent", () => {
     });
   });
 
+  it("runs a batch of tool calls and rejects arguments that are not an object", async () => {
+    await withAgent(
+      [
+        {
+          toolCalls: [
+            { id: "call_a", name: "read_file", arguments: "[]" },
+            { id: "call_b", name: "glob", arguments: JSON.stringify({ pattern: "" }) },
+          ],
+        },
+        { text: "done" },
+      ],
+      {},
+      async ({ harness }) => {
+        await harness.prompt("read twice");
+
+        const failed = harness.updates.filter(
+          (entry) =>
+            (entry as { sessionUpdate?: string }).sessionUpdate === "tool_call_update" &&
+            (entry as { status?: string }).status === "failed",
+        ) as Array<{ content?: unknown }>;
+
+        // Two calls, two failures: one because a JSON array is not a tool
+        // input object, one because the tool rejected what it was given.
+        expect(failed).toHaveLength(2);
+        expect(JSON.stringify(failed[0]?.content)).toContain("must be a JSON object");
+        expect(JSON.stringify(failed[1]?.content)).toContain("non-empty `pattern`");
+      },
+    );
+  });
+
   it("attaches the terminal to a bash call run through the client", async () => {
     await withAgent(
       [
