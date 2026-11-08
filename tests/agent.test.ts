@@ -12,7 +12,7 @@ import type { PollinationsAgentApp } from "../src/agent/server.js";
 import { withInProcessClient } from "./helpers/acp-client.js";
 import type { Harness } from "./helpers/acp-client.js";
 import { startFakeLlmServer } from "./helpers/fake-llm-server.js";
-import type { FakeLlmServer, FakeTurn } from "./helpers/fake-llm-server.js";
+import type { FakeLlmOptions, FakeLlmServer, FakeTurn } from "./helpers/fake-llm-server.js";
 import { createTmpDir } from "./helpers/tmp.js";
 
 const servers: FakeLlmServer[] = [];
@@ -38,9 +38,9 @@ async function withAgent(
   turns: FakeTurn[],
   overrides: Partial<AgentConfig>,
   op: (args: OpArgs) => Promise<void>,
-  clientOptions: ClientKnobs = {},
+  knobs: { client?: ClientKnobs; llm?: FakeLlmOptions } = {},
 ): Promise<void> {
-  const server = await startFakeLlmServer(turns);
+  const server = await startFakeLlmServer(turns, knobs.llm ?? {});
   servers.push(server);
 
   const workspace = await createTmpDir("acp-agent");
@@ -62,7 +62,7 @@ async function withAgent(
     llm: new PollinationsLlm({ apiKey: config.apiKey, baseUrl: config.baseUrl, model: config.model }),
   });
 
-  await withInProcessClient(agent, { cwd: workspace.path, ...clientOptions }, async (harness) => {
+  await withInProcessClient(agent, { cwd: workspace.path, ...(knobs.client ?? {}) }, async (harness) => {
     await op({ cwd: workspace.path, server, harness, agent });
   });
 }
@@ -319,7 +319,36 @@ describe("createPollinationsAgent", () => {
         expect(harness.permissionRequests).toHaveLength(0);
         await expect(readFile(join(cwd, "unsupported.txt"), "utf8")).rejects.toThrow();
       },
-      { permissionUnsupported: true },
+      { client: { permissionUnsupported: true } },
+    );
+  });
+
+  it("turns an upstream failure into a protocol error and a notice", async () => {
+    await withAgent(
+      [],
+      {},
+      async ({ harness }) => {
+        // 400 is not retryable, so the failure surfaces on the first attempt
+        // instead of burning the backoff schedule before giving up.
+        await expect(harness.prompt("hello")).rejects.toMatchObject({
+          code: -32603,
+          message: expect.stringContaining("400"),
+        });
+
+        // The client asked for notices, so the failure is reported in the
+        // thread rather than only on stderr.
+        const notice = harness.updates.find(
+          (update) => update.sessionUpdate === "notice",
+        ) as { severity?: string; description?: string } | undefined;
+        expect(notice?.severity).toBe("error");
+        expect(notice?.description).toContain("400");
+      },
+      {
+        client: { capabilities: { session: { notices: {} } } },
+        llm: {
+          failWith: { status: 400, body: JSON.stringify({ error: { message: "bad request" } }) },
+        },
+      },
     );
   });
 

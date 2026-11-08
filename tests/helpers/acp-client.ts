@@ -300,7 +300,10 @@ async function runScenario(
     harness.prompt = (input) => {
       const pending = session.prompt(input);
       // Drain updates concurrently so nothing is dropped while the turn runs.
-      void drainUntilStop(session, harness.updates);
+      // A failed turn ends this loop with the same error the prompt rejects
+      // with, which is already asserted by the caller: swallowing it here
+      // keeps it from surfacing as an unhandled rejection.
+      void drainUntilStop(session, harness.updates).catch(() => {});
       return pending;
     };
     harness.waitFor = (predicate, timeoutMs = 5_000) =>
