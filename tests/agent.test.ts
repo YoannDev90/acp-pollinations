@@ -529,6 +529,74 @@ describe("model picker", () => {
     });
   });
 
+  it("rejects a reasoning level the agent does not know", async () => {
+    await withAgent([{ text: "unused" }], {}, async ({ harness }) => {
+      const error = await harness.ctx
+        .request("session/set_config_option", {
+          sessionId: harness.session.sessionId,
+          configId: "reasoning",
+          value: "extreme",
+        })
+        .then(
+          () => null,
+          (caught: Error & { code?: number; data?: { available?: string[] } }) => caught,
+        );
+
+      expect(error?.code).toBe(-32602);
+      expect(error?.message).toContain("extreme");
+      // The error lists the levels that do exist so the client can re-pick.
+      expect(error?.data?.available).toEqual(expect.arrayContaining(["medium", "high"]));
+    });
+  });
+
+  it("rejects a non-string value for the model picker", async () => {
+    await withAgent([{ text: "unused" }], {}, async ({ harness }) => {
+      // The schema allows boolean values for toggle options; the model picker
+      // is a select, so it must refuse rather than store `true` as a model id.
+      await expect(
+        harness.ctx.request("session/set_config_option", {
+          sessionId: harness.session.sessionId,
+          configId: "model",
+          type: "boolean",
+          value: true,
+        }),
+      ).rejects.toMatchObject({ code: -32602, message: expect.stringContaining("model id") });
+    });
+  });
+
+  it("switches the mode through session/set_mode and persists it", async () => {
+    await withAgent([{ text: "unused" }], {}, async ({ harness }) => {
+      const response = await harness.ctx.request("session/set_mode", {
+        sessionId: harness.session.sessionId,
+        modeId: "plan",
+      });
+      expect(response).toEqual({});
+
+      // The change is visible to the next turn's command, not just to the
+      // acknowledgement.
+      await harness.prompt("/mode");
+      expect(agentText(harness.updates)).toContain("Current mode: plan");
+    });
+  });
+
+  it("rejects an unknown mode id and an unknown session", async () => {
+    await withAgent([{ text: "unused" }], {}, async ({ harness }) => {
+      await expect(
+        harness.ctx.request("session/set_mode", {
+          sessionId: harness.session.sessionId,
+          modeId: "focus",
+        }),
+      ).rejects.toMatchObject({ code: -32602, message: expect.stringContaining("focus") });
+
+      await expect(
+        harness.ctx.request("session/set_mode", {
+          sessionId: "sess_missing",
+          modeId: "plan",
+        }),
+      ).rejects.toMatchObject({ code: -32002 });
+    });
+  });
+
   it("rejects a model switch for an unknown session", async () => {
     await withAgent([{ text: "unused" }], {}, async ({ harness }) => {
       await expect(
@@ -774,6 +842,56 @@ describe("session restore (load and resume)", () => {
     );
   });
 
+  it("rejects a load whose cwd is not an absolute path", async () => {
+    await withRestartedAgent([{ text: "first" }], async ({ harness }) => {
+      await expect(
+        harness.ctx.request("session/load", {
+          sessionId: "sess_any",
+          cwd: "relative/path",
+          mcpServers: [],
+        }),
+      ).rejects.toMatchObject({ code: -32602 });
+    });
+  });
+
+  it("rejects a load whose additional directory is relative", async () => {
+    await withRestartedAgent([{ text: "first" }], async ({ sessionId, harness }) => {
+      await expect(
+        harness.ctx.request("session/load", {
+          sessionId,
+          cwd: harness.cwd,
+          additionalDirectories: ["relative/dir"],
+          mcpServers: [],
+        }),
+      ).rejects.toMatchObject({ code: -32602 });
+
+      // An absolute entry is accepted and joins the session's roots.
+      const response = await harness.ctx.request("session/load", {
+        sessionId,
+        cwd: harness.cwd,
+        additionalDirectories: [harness.cwd],
+        mcpServers: [],
+      });
+      expect((response.configOptions ?? [])[0]?.currentValue).toBe("test-model");
+    });
+  });
+
+  it("reloads a session that is still live in this process", async () => {
+    await withAgent([{ text: "unused" }], {}, async ({ harness, server }) => {
+      // Warm in memory: load answers from it rather than from the store, and
+      // the conversation is not replayed a second time.
+      const before = server.requests.length;
+      const response = await harness.ctx.request("session/load", {
+        sessionId: harness.session.sessionId,
+        cwd: harness.cwd,
+        mcpServers: [],
+      });
+
+      expect((response.configOptions ?? [])[0]?.currentValue).toBe("test-model");
+      expect(server.requests).toHaveLength(before);
+    });
+  });
+
   it("resumes a session that is still live without touching disk", async () => {
     await withAgent([{ text: "unused" }], {}, async ({ harness, server }) => {
       const response = await harness.ctx.request("session/resume", {
@@ -851,6 +969,15 @@ describe("session restore (load and resume)", () => {
           mcpServers: [],
         }),
       ).rejects.toMatchObject({ code: -32602 });
+
+      // An absolute entry is accepted and joins the session's roots.
+      const response = await harness.ctx.request("session/resume", {
+        sessionId,
+        cwd: harness.cwd,
+        additionalDirectories: [harness.cwd],
+        mcpServers: [],
+      });
+      expect((response.configOptions ?? [])[0]?.currentValue).toBe("test-model");
     });
   });
 
