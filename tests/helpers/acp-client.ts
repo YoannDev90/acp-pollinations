@@ -17,6 +17,7 @@ import type {
   ClientSessionCapabilities,
   ContentBlock,
   InitializeResponse,
+  NewSessionRequest,
   PromptResponse,
   RequestPermissionRequest,
   SessionUpdate,
@@ -54,6 +55,8 @@ export type Harness = {
   };
   /** Set when the scenario opens its own session; see `BaseOptions`. */
   skipSession?: boolean;
+  /** MCP servers the opened session was created with. */
+  mcpServers?: NewSessionRequest["mcpServers"];
   /** Sends a prompt and drains updates until the turn stops. */
   prompt: (input: string | ContentBlock[]) => Promise<PromptResponse>;
   /** Waits until `predicate` holds over the streamed updates. */
@@ -79,6 +82,11 @@ type BaseOptions = {
    * fails the way a client that does not implement the method would.
    */
   permissionUnsupported?: boolean;
+  /**
+   * MCP servers handed to `session/new`, so a session can hold live
+   * connections the way an editor-configured one does.
+   */
+  mcpServers?: NewSessionRequest["mcpServers"];
 };
 
 type ClientAppWithHarness = {
@@ -189,6 +197,7 @@ function buildClientApp(options: BaseOptions): ClientAppWithHarness {
     virtualFiles: new Map(),
     capabilities: options.capabilities,
     skipSession: options.skipSession,
+    mcpServers: options.mcpServers,
     answerPermission: options.answerPermission,
     prompt: async () => {
       throw new Error("prompt() is only available inside a scenario");
@@ -294,7 +303,11 @@ async function runScenario(
     return;
   }
 
-  await ctx.buildSession(harness.cwd).withSession(async (session) => {
+  const builder = harness.mcpServers
+    ? ctx.buildSession({ cwd: harness.cwd, mcpServers: harness.mcpServers })
+    : ctx.buildSession(harness.cwd);
+
+  await builder.withSession(async (session) => {
     harness.session = session;
 
     harness.prompt = (input) => {

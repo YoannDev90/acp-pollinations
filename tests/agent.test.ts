@@ -1,8 +1,9 @@
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
-import type { SessionConfigOption, SessionConfigSelectGroup, ClientSessionCapabilities } from "@agentclientprotocol/sdk";
+import type { SessionConfigOption, SessionConfigSelectGroup, ClientSessionCapabilities, NewSessionRequest } from "@agentclientprotocol/sdk";
 import { afterAll, describe, expect, it, vi } from "vitest";
 
 import type { AgentConfig } from "../src/config.js";
@@ -28,7 +29,23 @@ type OpArgs = { cwd: string; server: FakeLlmServer; harness: Harness; agent: Pol
 type ClientKnobs = {
   permissionUnsupported?: boolean;
   capabilities?: { fs?: boolean; terminal?: boolean; session?: ClientSessionCapabilities };
+  mcpServers?: NewSessionRequest["mcpServers"];
 };
+
+/**
+ * The fake stdio MCP server, wired the way an editor would wire a real one.
+ *
+ * A session that holds a live connection is the only way to reach the
+ * close/delete paths that tear those connections down.
+ */
+const FAKE_MCP_SERVER: NewSessionRequest["mcpServers"] = [
+  {
+    name: "fake",
+    command: process.execPath,
+    args: [fileURLToPath(new URL("./helpers/fake-mcp-server.mjs", import.meta.url))],
+    env: [],
+  },
+];
 
 /**
  * Boots a fake endpoint, a scratch workspace, and an agent, then runs `op`
@@ -1231,6 +1248,66 @@ describe("session listing and deletion", () => {
     });
   });
 
+  it("closes its MCP connections when the prompt deletes the session", async () => {
+    const state = await createTmpDir("acp-slash-delete");
+    cleanups.push(state.cleanup);
+
+    await withAgent(
+      [{ text: "ok" }],
+      { sessionsDir: state.path },
+      async ({ harness }) => {
+        // The session holds a live MCP child, so the teardown has something
+        // to close rather than an empty list to skip.
+        await harness.prompt("first turn");
+        expect(await readdir(state.path)).toHaveLength(1);
+
+        await harness.prompt("/delete");
+
+        expect(agentText(harness.updates)).toContain("Session deleted.");
+        expect(await readdir(state.path)).toEqual([]);
+      },
+      { client: { mcpServers: FAKE_MCP_SERVER } },
+    );
+  });
+
+  it("closes the MCP connections when the session is closed", async () => {
+    const state = await createTmpDir("acp-mcp-close");
+    cleanups.push(state.cleanup);
+
+    await withAgent(
+      [{ text: "ok" }],
+      { sessionsDir: state.path },
+      async ({ harness }) => {
+        await expect(
+          harness.ctx.request("session/close", { sessionId: harness.session.sessionId }),
+        ).resolves.toEqual({});
+      },
+      { client: { mcpServers: FAKE_MCP_SERVER } },
+    );
+  });
+
+  it("closes the MCP connections when a live session is deleted", async () => {
+    const state = await createTmpDir("acp-mcp-delete");
+    cleanups.push(state.cleanup);
+
+    await withAgent(
+      [{ text: "ok" }],
+      { sessionsDir: state.path },
+      async ({ harness }) => {
+        // A second thread, so the first one is still live when this request
+        // tears its connections down.
+        const second = await harness.ctx
+          .buildSession({ cwd: harness.cwd, mcpServers: FAKE_MCP_SERVER })
+          .withSession(async (session) => session.sessionId);
+
+        await expect(
+          harness.ctx.request("session/delete", { sessionId: second }),
+        ).resolves.toBeDefined();
+      },
+      { client: { mcpServers: FAKE_MCP_SERVER } },
+    );
+  });
+
   it("succeeds silently when deleting a session it has never seen", async () => {
     const state = await createTmpDir("acp-delete-unknown");
     cleanups.push(state.cleanup);
@@ -1572,6 +1649,21 @@ describe("shutdown", () => {
           ),
         ).toBe(true);
       },
+    );
+  });
+
+  it("closes the MCP connections every live session holds", async () => {
+    await withAgent(
+      [{ text: "ok" }],
+      {},
+      async ({ harness, agent }) => {
+        await harness.prompt("hello");
+
+        // The MCP child is owned by the process, not by a turn: only the
+        // wind-down can be what releases it.
+        await agent.shutdown();
+      },
+      { client: { mcpServers: FAKE_MCP_SERVER } },
     );
   });
 
