@@ -1334,12 +1334,16 @@ describe("compaction", () => {
     compactionThresholdTokens: number,
     capabilities: { session?: ClientSessionCapabilities } | undefined,
     op: (args: { harness: Harness; server: FakeLlmServer }) => Promise<void>,
+    llmOptions: FakeLlmOptions = {},
   ): Promise<void> {
-    const server = await startFakeLlmServer([
-      { text: "first answer", usage: { prompt_tokens: 5_000, completion_tokens: 10 } },
-      { text: "Summary of the work so far." },
-      { text: "second answer" },
-    ]);
+    const server = await startFakeLlmServer(
+      [
+        { text: "first answer", usage: { prompt_tokens: 5_000, completion_tokens: 10 } },
+        { text: "Summary of the work so far." },
+        { text: "second answer" },
+      ],
+      llmOptions,
+    );
     servers.push(server);
 
     const workspace = await createTmpDir("acp-compact");
@@ -1422,6 +1426,40 @@ describe("compaction", () => {
 
       expect(lifecycle).toEqual(["in_progress", "completed"]);
     });
+  });
+
+  it("reports a failed compaction to a client that asked for notices", async () => {
+    await withOverflowingSession(
+      100,
+      { session: { compaction: {}, notices: {} } },
+      async ({ harness }) => {
+        await harness.prompt("the second question");
+
+        // The summarising request is answered with nothing, so the rewrite
+        // must be abandoned and both channels told about it.
+        const lifecycle = harness.updates
+          .filter((update) => update.sessionUpdate === "compaction_update")
+          .map((update) => String((update as { status?: unknown }).status));
+        expect(lifecycle).toEqual(["in_progress", "failed"]);
+
+        const notice = harness.updates.find(
+          (update) => update.sessionUpdate === "notice",
+        ) as { severity?: string; title?: string } | undefined;
+        expect(notice?.severity).toBe("warning");
+        expect(notice?.title).toBe("Compaction failed");
+      },
+      {
+        turnFor: (_request, index) =>
+          index === 1
+            ? {}
+            : {
+                text: index === 0 ? "first answer" : "second answer",
+                ...(index === 0
+                  ? { usage: { prompt_tokens: 5_000, completion_tokens: 10 } }
+                  : {}),
+              },
+      },
+    );
   });
 
   it("stays silent when the client did not advertise compaction", async () => {
