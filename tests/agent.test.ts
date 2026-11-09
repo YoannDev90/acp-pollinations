@@ -1584,6 +1584,49 @@ describe("slash commands", () => {
     });
   });
 
+  it("compacts a transcript that has grown past a turn", async () => {
+    await withAgent(
+      [{ text: "first answer" }, { text: "Summary of the work." }, { text: "after" }],
+      {},
+      async ({ harness, server }) => {
+        await harness.prompt("first question");
+        await harness.prompt("/compact");
+
+        expect(agentText(harness.updates)).toContain("Compacted.");
+
+        // The old thread is gone from what the model sees: only the system
+        // message, the summary, and the new question remain.
+        await harness.prompt("next question");
+        const texts = (server.requests[2]?.messages ?? []).map((message) =>
+          contentText(message.content),
+        );
+        expect(texts).toContain("Summary of the work.");
+        expect(texts.some((text) => text.includes("first question"))).toBe(false);
+      },
+    );
+  });
+
+  it("reports a compaction the model answered with nothing", async () => {
+    await withAgent(
+      [{ text: "first answer" }, { text: "after" }],
+      {},
+      async ({ harness }) => {
+        await harness.prompt("first question");
+        await harness.prompt("/compact");
+
+        // An empty summary must not be written over a real transcript, so the
+        // command reports the failure instead of claiming success.
+        expect(agentText(harness.updates)).toContain("Compaction failed.");
+      },
+      {
+        llm: {
+          turnFor: (_request, index) =>
+            index === 1 ? {} : { text: index === 0 ? "first answer" : "after" },
+        },
+      },
+    );
+  });
+
   it("deletes the session and stops persisting it", async () => {
     const state = await createTmpDir("acp-cmd-del");
     cleanups.push(state.cleanup);
