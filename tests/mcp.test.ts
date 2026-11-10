@@ -38,6 +38,7 @@ async function connectStdio(mode?: string): Promise<McpConnection[]> {
 type Recorded = {
   method: string;
   sessionId: string | null;
+  probe: string | null;
   body: { id?: number; method?: string };
 };
 
@@ -70,6 +71,7 @@ async function startHttpServer(options: {
       requests.push({
         method: req.method ?? "",
         sessionId: (req.headers["mcp-session-id"] as string | undefined) ?? null,
+        probe: (req.headers["x-probe"] as string | undefined) ?? null,
         body,
       });
 
@@ -318,6 +320,29 @@ describe("MCP HTTP transport", () => {
       await server.close();
     }
   });
+
+  it("forwards configured headers in either shape", async () => {
+    const server = await startHttpServer();
+    try {
+      const asArray = await connectHttpMcpServer(
+        { type: "http", url: server.url, headers: [{ name: "x-probe", value: "array-form" }] },
+        FAST,
+      );
+      asArray.close();
+
+      const asObject = await connectHttpMcpServer(
+        { type: "http", url: server.url, headers: { "x-probe": "object-form" } },
+        FAST,
+      );
+      asObject.close();
+
+      // Editors spell headers both ways; the wire must not care which.
+      expect(server.requests[0]?.probe).toBe("array-form");
+      expect(server.requests.some((request) => request.probe === "object-form")).toBe(true);
+    } finally {
+      await server.close();
+    }
+  });
 });
 
 describe("MCP SSE transport", () => {
@@ -358,6 +383,19 @@ describe("MCP SSE transport", () => {
 
     await expect(connection).rejects.toThrow(/endpoint|closed/);
   });
+
+  it("reports a failing server through the shared connect path", async () => {
+    const server = await startSseServer({ sendEndpoint: false });
+    // `connectMcpServers` is the layer that decides a broken entry is
+    // survivable, and it names the target it gave up on. The stream is cut
+    // short rather than left to the handshake deadline, so the failure is
+    // the server going away, not the clock.
+    const pending = connectMcpServers([{ type: "sse", url: server.url, name: "sse-fake" }]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await server.close();
+
+    expect(await pending).toEqual([]);
+  });
 });
 
 describe("normalizeMcpServer", () => {
@@ -374,6 +412,8 @@ describe("normalizeMcpServer", () => {
     expect(isHttpMcpServer({ url: "http://localhost:1" })).toBe(true);
     expect(isHttpMcpServer({ type: "stdio", url: "http://localhost:1" })).toBe(false);
     expect(isHttpMcpServer({ type: "http" })).toBe(false);
+    // A `type` that is not a string at all is still not one of the two.
+    expect(isHttpMcpServer({ type: 42, url: "http://localhost:1" })).toBe(false);
   });
 
   it("normalises both shapes and rejects anything else", () => {
