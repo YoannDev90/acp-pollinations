@@ -568,6 +568,57 @@ describe("executeTool", () => {
       const { context } = await makeWorkspace();
       await expectFailure(executeTool("bash", {}, context), /`command` is required/);
     });
+
+    it("kills the child when the session signal aborts", async () => {
+      const controller = new AbortController();
+      const { context } = await makeWorkspace({ signal: controller.signal });
+
+      const pending = executeTool("bash", { command: "sleep 30" }, context);
+      setTimeout(() => controller.abort(), 50);
+
+      // The abort is what ends the command: without it the run would sit
+      // until the 120s ceiling.
+      const result = await pending;
+      expect(result.isError).toBe(true);
+      expect(result.output).toMatch(/exit code/);
+    });
+
+    it("reports a shell that never started", async () => {
+      const { path, context } = await makeWorkspace();
+      // Point the run at a working directory that is not there.
+      context.cwd = join(path, "gone");
+
+      // A cwd the shell cannot enter fails `spawn` itself, which arrives as
+      // an `error` event rather than an exit status.
+      const result = await executeTool("bash", { command: "echo hi" }, context);
+
+      expect(result.isError).toBe(true);
+      expect(result.output).toMatch(/ENOENT|spawn/);
+    });
+
+    it("swallows a failure to release the terminal", async () => {
+      const { context } = await makeWorkspace({
+        clientCapabilities: { terminal: true },
+        client: {
+          createTerminal: async () => ({
+            id: "term_1",
+            currentOutput: async () => ({ output: "hi\n", truncated: false }),
+            waitForExit: async () => ({ exitCode: 0, signal: null }),
+            kill: async () => undefined,
+            release: async () => {
+              throw new Error("already released");
+            },
+          }),
+        } as unknown as AgentContext,
+      });
+
+      // The command's result is what the model needs; a teardown failure is
+      // not worth losing it over.
+      const result = await executeTool("bash", { command: "echo hi" }, context);
+
+      expectSuccess(result);
+      expect(result.terminalId).toBe("term_1");
+    });
   });
 
   describe("permission gate", () => {

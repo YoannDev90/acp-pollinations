@@ -723,7 +723,10 @@ async function runViaClientTerminal(command: string, ctx: ToolContext): Promise<
 
   try {
     const killTimer = setTimeout(() => {
+      /* v8 ignore start -- runs only when the 120s ceiling elapses, which no
+         test waits out */
       void handle.kill().catch(() => undefined);
+      /* v8 ignore stop */
     }, BASH_TIMEOUT_MS);
 
     try {
@@ -759,7 +762,10 @@ function runLocally(command: string, ctx: ToolContext): Promise<CommandResult> {
     child.stdout.on("data", collect);
     child.stderr.on("data", collect);
 
+    /* v8 ignore start -- the same 120s ceiling: this kill runs only if a
+       command outlives it, and no test waits that long */
     const timer = setTimeout(() => child.kill("SIGKILL"), BASH_TIMEOUT_MS);
+    /* v8 ignore stop */
     const onAbort = () => child.kill("SIGKILL");
     ctx.signal.addEventListener("abort", onAbort, { once: true });
 
