@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 
@@ -134,6 +134,27 @@ describe("executeTool", () => {
     it("refuses directories", async () => {
       const { path, context } = await makeWorkspace();
       await expectFailure(executeTool("read_file", { path }, context), /is a directory/);
+    });
+
+    it("refuses files past the size ceiling", async () => {
+      const { path, context } = await makeWorkspace();
+      const big = join(path, "big.bin");
+      await writeFile(big, Buffer.alloc(1_000_001));
+
+      // The ceiling is checked before the read, and the size in the message
+      // comes from the stat that triggered it.
+      await expectFailure(executeTool("read_file", { path: big }, context), /too large to read \(1000001 bytes\)/);
+    });
+
+    it.skipIf(process.getuid?.() === 0)("surfaces errors that are neither missing files nor directories", async () => {
+      const { path, context } = await makeWorkspace();
+      const file = join(path, "locked.txt");
+      await writeFile(file, "x\n");
+      await chmod(file, 0o000);
+
+      // A read that fails for a reason the tool does not translate keeps the
+      // original error instead of being reported as missing.
+      await expectFailure(executeTool("read_file", { path: file }, context), /EACCES/);
     });
   });
 
@@ -280,6 +301,42 @@ describe("executeTool", () => {
         /must not be empty/,
       );
     });
+
+    it("edits through the client when it offers a filesystem", async () => {
+      const seen: string[] = [];
+      // The editor holds the authoritative buffer: unsaved changes must be
+      // what the replacement is computed against, and the write goes back
+      // through the client instead of onto disk.
+      const client = {
+        request: async (method: string) => {
+          seen.push(method);
+          return method.includes("read_text_file") ? { content: "alpha beta\n" } : {};
+        },
+      } as unknown as AgentContext;
+
+      const { path, context } = await makeWorkspace({
+        client,
+        clientCapabilities: { fs: { readTextFile: true, writeTextFile: true } },
+      });
+      const file = join(path, "buffer.txt");
+
+      const result = await executeTool(
+        "edit_file",
+        { path: file, old_text: "alpha", new_text: "omega" },
+        context,
+      );
+
+      expectSuccess(result);
+      expect(seen).toEqual([
+        expect.stringContaining("read_text_file"),
+        expect.stringContaining("write_text_file"),
+      ]);
+      expect(result.diff).toEqual({
+        path: file,
+        oldText: "alpha beta\n",
+        newText: "omega beta\n",
+      });
+    });
   });
 
   describe("list_dir", () => {
@@ -301,6 +358,24 @@ describe("executeTool", () => {
         executeTool("list_dir", { path: join(path, "nope") }, context),
         /Directory not found/,
       );
+    });
+
+    it("explains when the target is a file", async () => {
+      const { path, context } = await makeWorkspace();
+      const file = join(path, "not-a-dir.txt");
+      await writeFile(file, "x\n");
+
+      await expectFailure(executeTool("list_dir", { path: file }, context), /is not a directory/);
+    });
+
+    it.skipIf(process.getuid?.() === 0)("keeps the original error for anything else", async () => {
+      const { path, context } = await makeWorkspace();
+      const locked = join(path, "locked");
+      await mkdir(locked);
+      // Root ignores mode bits, so only a normal user can produce this.
+      await chmod(locked, 0o000);
+
+      await expectFailure(executeTool("list_dir", { path: locked }, context), /EACCES/);
     });
   });
 
