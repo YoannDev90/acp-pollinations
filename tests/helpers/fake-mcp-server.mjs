@@ -8,6 +8,11 @@
  *
  *   (none)     normal server: paginated `tools/list`, working `tools/call`
  *   exit-early dies before answering anything, to exercise the failure path
+ *   garbage    answers `initialize`, but first writes lines that are not
+ *              messages: blank, unparseable, and parsed-but-not-an-object
+ *   error-reply refuses `initialize` with a JSON-RPC error
+ *   env-gated  exits unless `ACP_FAKE_ENV` reached the child, so a test can
+ *              prove the configured environment was merged in
  */
 import { createInterface } from "node:readline";
 
@@ -16,6 +21,10 @@ const mode = process.argv[2] ?? "normal";
 // A process that exits during `initialize` must degrade to "no tools", not
 // leave the agent waiting on a request nobody will ever answer.
 if (mode === "exit-early") process.exit(0);
+
+// Same, but only when the configured environment did not reach the child:
+// a server that cannot see its variables has nothing to offer.
+if (mode === "env-gated" && process.env.ACP_FAKE_ENV !== "on") process.exit(0);
 
 const FIRST_PAGE = [
   {
@@ -57,6 +66,18 @@ rl.on("line", (line) => {
   const { id, method, params } = message;
 
   if (method === "initialize") {
+    if (mode === "error-reply") {
+      process.stdout.write(
+        `${JSON.stringify({ jsonrpc: "2.0", id, error: { message: "initialize refused" } })}\n`,
+      );
+      return;
+    }
+    if (mode === "garbage") {
+      // Noise on the wire has to be looked past, not fatal: a blank line, a
+      // line that is not JSON, and JSON that is not a message at all.
+      process.stdout.write("\nnot json at all\n\"just a string\"\nnull\n42\n");
+      process.stderr.write("garbage mode reporting for duty\n");
+    }
     reply(id, {
       protocolVersion: "2025-06-18",
       capabilities: {},

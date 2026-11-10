@@ -223,6 +223,47 @@ describe("MCP stdio transport", () => {
     expect(() => connection?.close()).not.toThrow();
   });
 
+  it("looks past lines on the wire that are not messages", async () => {
+    const [connection] = await connectStdio("garbage");
+
+    // A blank line, a line that will not parse, and JSON that parses into
+    // something that is not a message all arrive before the handshake does;
+    // none of them may end the connection or stall the reply.
+    expect(connection?.tools.map((tool) => tool.name)).toEqual(["echo", "shout", "ping", "huge"]);
+    connection?.close();
+  });
+
+  it("degrades when the server refuses to initialize", async () => {
+    const [connection] = await connectStdio("error-reply");
+
+    // A JSON-RPC error is an answer, not a hang: the session gets no tools
+    // from this server rather than waiting on a handshake that failed.
+    expect(connection?.tools).toEqual([]);
+    expect(() => connection?.close()).not.toThrow();
+  });
+
+  it("merges a configured environment into the child", async () => {
+    // The server exits unless its variable arrives, so a listed tool is the
+    // proof that both configuration shapes reach the spawned process.
+    for (const env of [
+      [{ name: "ACP_FAKE_ENV", value: "on" }],
+      { ACP_FAKE_ENV: "on" },
+    ]) {
+      const [connection] = await connectMcpServers([
+        {
+          type: "stdio",
+          command: process.execPath,
+          args: [fakeServer, "env-gated"],
+          name: "fake",
+          env,
+        },
+      ]);
+
+      expect(connection?.tools.length).toBeGreaterThan(0);
+      connection?.close();
+    }
+  });
+
   it("clips tool output past the size ceiling", async () => {
     const [connection] = await connectStdio();
     const result = await connection?.bindings.get("huge")?.call({});
