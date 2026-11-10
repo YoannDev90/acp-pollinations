@@ -6,6 +6,7 @@ import type { AgentContext } from "@agentclientprotocol/sdk";
 
 import { LLM_TOOLS, TOOL_DEFINITIONS, executeTool, globToRegExp } from "../src/tools/index.js";
 import type { ToolContext, ToolExecutionResult } from "../src/tools/index.js";
+import type { McpToolBinding } from "../src/mcp/index.js";
 import { createTmpDir } from "./helpers/tmp.js";
 
 /** Workspaces are created per test and removed once the file finishes. */
@@ -578,6 +579,123 @@ describe("executeTool", () => {
 
       expect(result.isError).toBe(true);
       expect(result.output).toMatch(/Plan mode/);
+    });
+  });
+
+  describe("MCP tools", () => {
+    /** A binding shaped like the ones `connectMcpServers` builds. */
+    function binding(overrides: Partial<McpToolBinding> = {}): McpToolBinding {
+      return {
+        name: "remote_echo",
+        kind: "read",
+        mutating: false,
+        title: (input) => `srv: remote_echo ${JSON.stringify(input)}`,
+        call: async () => ({ output: "from remote", isError: false }),
+        ...overrides,
+      };
+    }
+
+    it("runs a read-only tool without asking for approval", async () => {
+      const { context } = await makeWorkspace({
+        approve: async () => {
+          throw new Error("should not be asked");
+        },
+        mcpTools: new Map([["remote_echo", binding()]]),
+      });
+
+      const result = await executeTool("remote_echo", { text: "hi" }, context);
+
+      expect(result).toEqual({ output: "from remote", isError: false });
+    });
+
+    it("asks approval before a mutating tool reaches the server", async () => {
+      const asks: Array<{ name: string; title: string }> = [];
+      const { context } = await makeWorkspace({
+        approve: async ({ name, title }) => {
+          asks.push({ name, title });
+          return true;
+        },
+        mcpTools: new Map([
+          [
+            "remote_apply",
+            binding({
+              name: "remote_apply",
+              mutating: true,
+              title: (input) => `srv: remote_apply ${JSON.stringify(input)}`,
+            }),
+          ],
+        ]),
+      });
+
+      const result = await executeTool("remote_apply", { text: "hi" }, context);
+
+      // The gate sees the rendered title the client shows the user, not just
+      // the raw tool name.
+      expect(asks).toEqual([{ name: "remote_apply", title: 'srv: remote_apply {"text":"hi"}' }]);
+      expect(result.output).toBe("from remote");
+    });
+
+    it("reports a rejection without calling the server", async () => {
+      let calls = 0;
+      const { context } = await makeWorkspace({
+        approve: async () => false,
+        mcpTools: new Map([
+          [
+            "remote_apply",
+            binding({
+              name: "remote_apply",
+              mutating: true,
+              call: async () => {
+                calls += 1;
+                return { output: "should not run", isError: false };
+              },
+            }),
+          ],
+        ]),
+      });
+
+      const result = await executeTool("remote_apply", {}, context);
+
+      expect(result.isError).toBe(true);
+      expect(result.output).toMatch(/rejected/);
+      expect(calls).toBe(0);
+    });
+
+    it("refuses a mutating tool while the session is in plan mode", async () => {
+      const { context } = await makeWorkspace({
+        mode: "plan",
+        approve: async () => {
+          throw new Error("should not be asked");
+        },
+        mcpTools: new Map([["remote_apply", binding({ name: "remote_apply", mutating: true })]]),
+      });
+
+      const result = await executeTool("remote_apply", {}, context);
+
+      expect(result.isError).toBe(true);
+      expect(result.output).toMatch(/Plan mode/);
+    });
+
+    it("turns a server-side failure into an error result", async () => {
+      const { context } = await makeWorkspace({
+        mcpTools: new Map([
+          [
+            "remote_broken",
+            binding({
+              name: "remote_broken",
+              call: async () => {
+                throw new Error("server exploded");
+              },
+            }),
+          ],
+        ]),
+      });
+
+      const result = await executeTool("remote_broken", {}, context);
+
+      // The turn survives: the model reads the failure as tool output.
+      expect(result.isError).toBe(true);
+      expect(result.output).toBe("server exploded");
     });
   });
 
