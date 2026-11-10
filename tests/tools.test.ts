@@ -95,6 +95,51 @@ describe("executeTool", () => {
       expect(result.locations?.[0]?.line).toBe(2);
     });
 
+    it("takes a line without a limit", async () => {
+      const { path, context } = await makeWorkspace();
+      await writeFile(join(path, "window.txt"), "l1\nl2\nl3\n");
+
+      const result = await executeTool("read_file", { path: join(path, "window.txt"), line: 2 }, context);
+
+      // No limit means "to the end of the file" rather than an empty window.
+      expect(result.output).toBe("l2\nl3\n");
+    });
+
+    it("takes a limit without a line", async () => {
+      const { path, context } = await makeWorkspace();
+      await writeFile(join(path, "head.txt"), "l1\nl2\nl3\n");
+
+      const result = await executeTool("read_file", { path: join(path, "head.txt"), limit: 2 }, context);
+
+      // No line means the window starts at the first line.
+      expect(result.output).toBe("l1\nl2");
+    });
+
+    it("asks the client for a windowed read", async () => {
+      const seen: Array<Record<string, unknown>> = [];
+      const client = {
+        request: async (_method: string, params: Record<string, unknown>) => {
+          seen.push(params);
+          return { content: "l2\nl3" };
+        },
+      } as unknown as AgentContext;
+
+      const { path, context } = await makeWorkspace({
+        client,
+        clientCapabilities: { fs: { readTextFile: true, writeTextFile: false } },
+      });
+
+      const result = await executeTool(
+        "read_file",
+        { path: join(path, "a.txt"), line: 2, limit: 2 },
+        context,
+      );
+
+      expectSuccess(result);
+      // The window travels as request parameters; the client does the slicing.
+      expect(seen[0]).toMatchObject({ line: 2, limit: 2 });
+    });
+
     it("asks the client's filesystem so unsaved buffers are visible", async () => {
       const seen: Array<{ method: string; params: Record<string, unknown> }> = [];
       // The mock mirrors a real editor: `fs/read_text_file` returns the
@@ -157,6 +202,25 @@ describe("executeTool", () => {
       // original error instead of being reported as missing.
       await expectFailure(executeTool("read_file", { path: file }, context), /EACCES/);
     });
+
+    it("renders a client failure that is not an Error", async () => {
+      // A client is a separate process: whatever it throws is not ours to
+      // assume is an Error instance.
+      const failure: unknown = "client said no";
+      const client = {
+        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- a non-Error rejection is the subject of this test
+        request: async () => Promise.reject(failure),
+      } as unknown as AgentContext;
+      const { path, context } = await makeWorkspace({
+        client,
+        clientCapabilities: { fs: { readTextFile: true, writeTextFile: false } },
+      });
+
+      const result = await executeTool("read_file", { path: join(path, "a.txt") }, context);
+
+      expect(result.isError).toBe(true);
+      expect(result.output).toBe("client said no");
+    });
   });
 
   describe("write_file", () => {
@@ -204,6 +268,19 @@ describe("executeTool", () => {
         executeTool("write_file", { path: join(path, "c.txt") }, context),
         /`content` is required/,
       );
+    });
+
+    it("reports an update when the file already exists", async () => {
+      const { path, context } = await makeWorkspace();
+      const file = join(path, "existing.txt");
+      await writeFile(file, "before\n");
+
+      const result = await executeTool("write_file", { path: file, content: "after\n" }, context);
+
+      expectSuccess(result);
+      expect(result.output).toMatch(/^Updated .*\(6 bytes\)$/);
+      // The diff carries what was replaced, which is what the client renders.
+      expect(result.diff).toEqual({ path: file, oldText: "before\n", newText: "after\n" });
     });
   });
 
@@ -289,6 +366,17 @@ describe("executeTool", () => {
       );
     });
 
+    it("requires new_text to be a string too", async () => {
+      const { path, context } = await makeWorkspace();
+      const file = join(path, "i.txt");
+      await writeFile(file, "x\n");
+
+      await expectFailure(
+        executeTool("edit_file", { path: file, old_text: "x", new_text: 7 }, context),
+        /must both be strings/,
+      );
+    });
+
     it("refuses an empty old_text", async () => {
       const { path, context } = await makeWorkspace();
       await writeFile(join(path, "h.txt"), "x\n");
@@ -369,6 +457,31 @@ describe("executeTool", () => {
       await expectFailure(executeTool("list_dir", { path: file }, context), /is not a directory/);
     });
 
+    it("defaults to the working directory and orders peers by name", async () => {
+      const { path, context } = await makeWorkspace();
+      await writeFile(join(path, "b.txt"), "2\n");
+      await writeFile(join(path, "a.txt"), "1\n");
+
+      const result = await executeTool("list_dir", {}, context);
+
+      expectSuccess(result);
+      // No path means the session cwd, and two files with the same kind are
+      // ordered by name rather than left in readdir order.
+      expect(result.output.split("\n")).toEqual(["a.txt", "b.txt"]);
+      expect(result.locations).toEqual([{ path }]);
+    });
+
+    it("describes an empty directory", async () => {
+      const { path, context } = await makeWorkspace();
+      const empty = join(path, "empty");
+      await mkdir(empty);
+
+      const result = await executeTool("list_dir", { path: empty }, context);
+
+      expectSuccess(result);
+      expect(result.output).toBe("(empty directory)");
+    });
+
     it.skipIf(process.getuid?.() === 0)("keeps the original error for anything else", async () => {
       const { path, context } = await makeWorkspace();
       const locked = join(path, "locked");
@@ -411,6 +524,16 @@ describe("executeTool", () => {
     it("requires a pattern", async () => {
       const { context } = await makeWorkspace();
       await expectFailure(executeTool("glob", {}, context), /`pattern` is required/);
+    });
+
+    it("searches the working directory when no path is given", async () => {
+      const { path, context } = await makeWorkspace();
+      await writeFile(join(path, "cwd-only.txt"), "");
+
+      const result = await executeTool("glob", { pattern: "*.txt" }, context);
+
+      expectSuccess(result);
+      expect(result.output).toContain(join(path, "cwd-only.txt"));
     });
 
     it("stops walking at the result ceiling", async () => {
@@ -497,6 +620,19 @@ describe("executeTool", () => {
       // everything and trimming afterwards.
       expect(result.output.split("\n")).toHaveLength(2);
       expect(result.output).toMatch(/match limit reached/);
+    });
+
+    it("caps the jump-to locations at twenty matches", async () => {
+      const { path, context } = await makeWorkspace();
+      const lines = Array.from({ length: 25 }, () => "needle").join("\n");
+      await writeFile(join(path, "many.txt"), `${lines}\n`);
+
+      const result = await executeTool("grep", { pattern: "needle" }, context);
+
+      // The client only ever jumps to the first twenty hits, but the model
+      // still sees every match line. No path means the session cwd.
+      expect(result.locations).toHaveLength(20);
+      expect(result.output.split("\n").filter((line) => line.includes("needle"))).toHaveLength(25);
     });
 
     it("skips directories and entries it cannot read", async () => {
@@ -618,6 +754,27 @@ describe("executeTool", () => {
 
       expectSuccess(result);
       expect(result.terminalId).toBe("term_1");
+    });
+
+    it("reports a terminal that ended without an exit code", async () => {
+      const { context } = await makeWorkspace({
+        clientCapabilities: { terminal: true },
+        client: {
+          createTerminal: async () => ({
+            id: "term_2",
+            currentOutput: async () => ({ output: "", truncated: false }),
+            // Killed rather than exited: there is no code to report.
+            waitForExit: async () => ({ exitCode: null, signal: "SIGKILL" }),
+            kill: async () => undefined,
+            release: async () => undefined,
+          }),
+        } as unknown as AgentContext,
+      });
+
+      const result = await executeTool("bash", { command: "sleep 30" }, context);
+
+      expect(result.isError).toBe(true);
+      expect(result.output).toContain("exit code null");
     });
   });
 
@@ -794,6 +951,29 @@ describe("executeTool", () => {
       expect(result.isError).toBe(true);
       expect(result.output).toBe("server exploded");
     });
+
+    it("renders a rejection that is not an Error", async () => {
+      const reason: unknown = "remote server melted down";
+      const { context } = await makeWorkspace({
+        mcpTools: new Map([
+          [
+            "remote_odd",
+            binding({
+              name: "remote_odd",
+              // A server is a separate process: it decides what comes back,
+              // and the binding must render it rather than crash.
+              // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- a non-Error rejection is the subject of this test
+              call: async () => Promise.reject(reason),
+            }),
+          ],
+        ]),
+      });
+
+      const result = await executeTool("remote_odd", {}, context);
+
+      expect(result.isError).toBe(true);
+      expect(result.output).toBe("remote server melted down");
+    });
   });
 
   it("names read-only tools in the client's tool-call list", () => {
@@ -804,6 +984,10 @@ describe("executeTool", () => {
     expect(TOOL_DEFINITIONS.list_dir.title({ path: 42 })).toBe("List <path>");
     expect(TOOL_DEFINITIONS.grep.title({ pattern: "needle" })).toBe("Search for needle");
     expect(TOOL_DEFINITIONS.grep.title({ pattern: { nested: true } })).toBe("Search for ");
+
+    // A long command would otherwise push the client's title list off screen.
+    expect(TOOL_DEFINITIONS.bash.title({ command: "x".repeat(200) })).toHaveLength(84);
+    expect(TOOL_DEFINITIONS.bash.title({ command: "x".repeat(200) }).endsWith("…")).toBe(true);
   });
 
   it("advertises every tool with a single-line description", () => {
