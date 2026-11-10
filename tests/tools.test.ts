@@ -58,6 +58,14 @@ describe("executeTool", () => {
     await expectFailure(executeTool("nope", {}, context), /Unknown tool/);
   });
 
+  it("treats a name that only exists on Object.prototype as unknown", async () => {
+    const { context } = await makeWorkspace();
+    // `TOOL_DEFINITIONS["constructor"]` resolves through the prototype chain
+    // to a truthy value, so the lookup cannot be the only check: the switch
+    // is what sends it back as unknown instead of running it as a tool.
+    await expectFailure(executeTool("constructor", {}, context), /Unknown tool/);
+  });
+
   describe("read_file", () => {
     it("returns the whole file with no line gutter", async () => {
       const { path, context } = await makeWorkspace();
@@ -242,6 +250,36 @@ describe("executeTool", () => {
         /outside/,
       );
     });
+
+    it("requires both texts to be strings", async () => {
+      const { path, context } = await makeWorkspace();
+      await writeFile(join(path, "g.txt"), "x\n");
+
+      // The model decides the arguments; a number in `old_text` is a usage
+      // error to report, not a crash inside `String.split`.
+      await expectFailure(
+        executeTool(
+          "edit_file",
+          { path: join(path, "g.txt"), old_text: 42, new_text: "y" },
+          context,
+        ),
+        /must both be strings/,
+      );
+    });
+
+    it("refuses an empty old_text", async () => {
+      const { path, context } = await makeWorkspace();
+      await writeFile(join(path, "h.txt"), "x\n");
+
+      await expectFailure(
+        executeTool(
+          "edit_file",
+          { path: join(path, "h.txt"), old_text: "", new_text: "y" },
+          context,
+        ),
+        /must not be empty/,
+      );
+    });
   });
 
   describe("list_dir", () => {
@@ -341,6 +379,11 @@ describe("executeTool", () => {
         executeTool("grep", { pattern: "abc(", path }, context),
         /Invalid regular expression/,
       );
+    });
+
+    it("requires a pattern", async () => {
+      const { context } = await makeWorkspace();
+      await expectFailure(executeTool("grep", {}, context), /`pattern` is required/);
     });
 
     it("reports no matches without failing", async () => {
@@ -443,6 +486,36 @@ describe("executeTool", () => {
     });
   });
 
+  describe("plan mode", () => {
+    it("refuses built-in mutating tools without asking for approval", async () => {
+      const { path, context } = await makeWorkspace({
+        mode: "plan",
+        approve: async () => {
+          throw new Error("should not be asked");
+        },
+      });
+
+      const result = await executeTool(
+        "write_file",
+        { path: join(path, "plan.txt"), content: "x" },
+        context,
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.output).toMatch(/Plan mode/);
+    });
+  });
+
+  it("names read-only tools in the client's tool-call list", () => {
+    // `executeTool` only renders titles for tools that ask permission, so the
+    // read-only titles have to be exercised directly or they never show up.
+    expect(TOOL_DEFINITIONS.list_dir.title({})).toBe("List .");
+    expect(TOOL_DEFINITIONS.list_dir.title({ path: "/srv/project/src" })).toContain("/srv/project/src");
+    expect(TOOL_DEFINITIONS.list_dir.title({ path: 42 })).toBe("List <path>");
+    expect(TOOL_DEFINITIONS.grep.title({ pattern: "needle" })).toBe("Search for needle");
+    expect(TOOL_DEFINITIONS.grep.title({ pattern: { nested: true } })).toBe("Search for ");
+  });
+
   it("advertises every tool with a single-line description", () => {
     for (const definition of Object.values(TOOL_DEFINITIONS)) {
       expect(definition.function.description).not.toMatch(/\n/);
@@ -470,5 +543,26 @@ describe("globToRegExp", () => {
   it("escapes regex metacharacters in literal segments", () => {
     expect(globToRegExp("a+b.txt").test("a+b.txt")).toBe(true);
     expect(globToRegExp("a+b.txt").test("aab.txt")).toBe(false);
+  });
+
+  it("treats a trailing ** as a match-anything suffix", () => {
+    // Only `**/` gets the directory-aware form; a bare `**` matches any
+    // characters, which is what `src/**` has to mean for nested paths.
+    expect(globToRegExp("src/**").test("src/deep/a.ts")).toBe(true);
+    expect(globToRegExp("src/**").test("other/deep/a.ts")).toBe(false);
+  });
+
+  it("expands brace alternatives into one anchored group", () => {
+    const include = globToRegExp("*.{ts,js}");
+    expect(include.test("a.ts")).toBe(true);
+    expect(include.test("a.js")).toBe(true);
+    expect(include.test("a.md")).toBe(false);
+  });
+
+  it("keeps a brace group it can close but cannot split", () => {
+    // A single alternative is still a group; an unterminated brace is a
+    // literal, so the pattern must stay usable either way.
+    expect(globToRegExp("a{b}.txt").test("ab.txt")).toBe(true);
+    expect(globToRegExp("a{b.txt").test("a{b.txt")).toBe(true);
   });
 });
