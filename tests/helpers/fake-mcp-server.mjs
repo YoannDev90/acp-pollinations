@@ -15,6 +15,8 @@
  *              prove the configured environment was merged in
  *   odd-tools  advertises entries that are not tools and answers calls with
  *              a bare object, a bare string, and a JSON-RPC error
+ *   silent-call answers `initialize` and `tools/list`, then never answers a
+ *              `tools/call`, so a test can watch the request deadline fire
  */
 import { createInterface } from "node:readline";
 
@@ -114,6 +116,9 @@ rl.on("line", (line) => {
   }
 
   if (method === "tools/call") {
+    // A server that accepts a call and goes quiet is the failure a deadline
+    // exists for: nothing else will ever settle this request.
+    if (mode === "silent-call") return;
     const name = params?.name;
     if (mode === "odd-tools") {
       if (name === "object-result") {

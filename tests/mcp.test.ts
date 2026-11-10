@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   connectHttpMcpServer,
@@ -234,6 +234,37 @@ describe("MCP stdio transport", () => {
     expect(failed?.output).toBe("tool exploded");
 
     connection?.close();
+  });
+
+  it("gives up on a call the server never answers", async () => {
+    const [connection] = await connectStdio("silent-call");
+    // Only the request deadline is moved: faking every timer would also
+    // freeze the handshake the connection just completed.
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      const pending = connection?.bindings.get("echo")?.call({});
+      await vi.advanceTimersByTimeAsync(30_000);
+      // Silence is not success: without the deadline this call would hold
+      // the turn open forever.
+      expect(await pending).toEqual({
+        output: 'MCP request "tools/call" timed out',
+        isError: true,
+      });
+    } finally {
+      vi.useRealTimers();
+      connection?.close();
+    }
+  });
+
+  it("fails a call made after the server's pipe is gone", async () => {
+    const [connection] = await connectStdio();
+    connection?.close();
+
+    // The child is dead, so the write hits a broken pipe. Node reports that
+    // as a stream error rather than a throw, and swallowing it is what keeps
+    // the rejection attached to this call instead of crashing the process.
+    const result = await connection?.bindings.get("echo")?.call({});
+    expect(result?.isError).toBe(true);
   });
 
   it("degrades to no tools when the command does not exist", async () => {

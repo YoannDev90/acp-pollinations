@@ -160,8 +160,12 @@ export async function connectMcpServer(config: McpServerConfig): Promise<McpConn
   };
   child.on("error", failPending);
   // The pipes break when a server dies mid-reply. That is the same outcome as
-  // it exiting, and an unhandled stream error would be a crash instead.
+  // it exiting, and an unhandled stream error would be a crash instead. A write
+  // after the pipe closed reaches the stdin handler; stdout instead ends
+  // cleanly and Node alone decides if it ever errors, so that one cannot be
+  // aimed at from a test without fabricating the failure inside the runtime.
   child.stdin?.on("error", () => undefined);
+  /* v8 ignore next */
   child.stdout?.on("error", () => undefined);
 
   rl.on("line", (line) => {
@@ -211,9 +215,13 @@ export async function connectMcpServer(config: McpServerConfig): Promise<McpConn
       try {
         child.stdin.write(JSON.stringify(payload) + "\n");
       } catch (error) {
+        /* v8 ignore start -- a broken pipe arrives as a stream `error` event
+           (handled above) rather than a throw from `write`, so no
+           production-reachable failure lands here */
         pending.delete(id);
         clearTimeout(timer);
         reject(error instanceof Error ? error : new Error(String(error)));
+        /* v8 ignore stop */
       }
     });
   }
