@@ -13,6 +13,8 @@
  *   error-reply refuses `initialize` with a JSON-RPC error
  *   env-gated  exits unless `ACP_FAKE_ENV` reached the child, so a test can
  *              prove the configured environment was merged in
+ *   odd-tools  advertises entries that are not tools and answers calls with
+ *              a bare object, a bare string, and a JSON-RPC error
  */
 import { createInterface } from "node:readline";
 
@@ -87,6 +89,21 @@ rl.on("line", (line) => {
   }
 
   if (method === "tools/list") {
+    if (mode === "odd-tools") {
+      reply(id, {
+        tools: [
+          "not an object",
+          null,
+          42,
+          { description: "an entry with no name" },
+          { name: "" },
+          { name: "object-result", description: "Replies with a bare object" },
+          { name: "string-result", description: "Replies with a bare string" },
+          { name: "throws", description: "Answers with a JSON-RPC error" },
+        ],
+      });
+      return;
+    }
     reply(
       id,
       params?.cursor === "page-2"
@@ -98,6 +115,22 @@ rl.on("line", (line) => {
 
   if (method === "tools/call") {
     const name = params?.name;
+    if (mode === "odd-tools") {
+      if (name === "object-result") {
+        reply(id, { ok: true, count: 3 });
+        return;
+      }
+      if (name === "string-result") {
+        reply(id, "plain text from the server");
+        return;
+      }
+      if (name === "throws") {
+        process.stdout.write(
+          `${JSON.stringify({ jsonrpc: "2.0", id, error: { message: "tool exploded" } })}\n`,
+        );
+        return;
+      }
+    }
     if (name === "shout") {
       reply(id, {
         content: [{ type: "text", text: String(params?.arguments?.text ?? "").toUpperCase() }],

@@ -203,6 +203,36 @@ describe("MCP stdio transport", () => {
     // sequence, which the model then read as punctuation.
     expect(result?.output).toBe("line one\nline two\nline three");
 
+    // The title the prompt loop shows next to a call names the server it
+    // came from, or two servers offering `echo` would be indistinguishable.
+    expect(connection?.bindings.get("echo")?.title({})).toBe("fake: echo");
+
+    connection?.close();
+  });
+
+  it("drops malformed tool entries and renders every result shape", async () => {
+    const [connection] = await connectStdio("odd-tools");
+
+    // Entries that are not tools at all are dropped rather than offered to
+    // the model under a missing or empty name.
+    expect(connection?.tools.map((tool) => tool.name)).toEqual([
+      "object-result",
+      "string-result",
+      "throws",
+    ]);
+
+    expect((await connection?.bindings.get("object-result")?.call({}))?.output).toBe(
+      JSON.stringify({ ok: true, count: 3 }),
+    );
+    expect((await connection?.bindings.get("string-result")?.call({}))?.output).toBe(
+      "plain text from the server",
+    );
+
+    // A JSON-RPC error is a failed tool call, not a failed turn.
+    const failed = await connection?.bindings.get("throws")?.call({});
+    expect(failed?.isError).toBe(true);
+    expect(failed?.output).toBe("tool exploded");
+
     connection?.close();
   });
 
@@ -472,6 +502,7 @@ describe("mergeMcpBindings", () => {
     // `bash` twice with only one of them routable.
     expect(merged.definitions[0]?.function.name).toBe("srv__bash");
     expect(merged.definitions[0]?.function.description).toBe("remote shell");
+    expect(merged.bindings.get("srv__bash")?.title({})).toBe("srv: bash");
     expect(await merged.bindings.get("srv__bash")?.call({})).toEqual({ output: "called bash" });
   });
 
