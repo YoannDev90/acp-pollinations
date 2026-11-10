@@ -46,7 +46,9 @@ export type Harness = {
   /** Files returned by `fs/read_text_file` regardless of disk state. */
   virtualFiles: Map<string, string>;
   /** Answer to permission prompts; return an `optionId`, or `null` to cancel. */
-  answerPermission?: (request: RequestPermissionRequest) => string | null;
+  answerPermission?: (
+    request: RequestPermissionRequest,
+  ) => string | null | Promise<string | null>;
   /** Whether the client advertises `fs`, `terminal`, and session capabilities. */
   capabilities?: {
     fs?: boolean;
@@ -58,7 +60,17 @@ export type Harness = {
   /** MCP servers the opened session was created with. */
   mcpServers?: NewSessionRequest["mcpServers"];
   /** Sends a prompt and drains updates until the turn stops. */
-  prompt: (input: string | ContentBlock[]) => Promise<PromptResponse>;
+  prompt: (
+    input: string | ContentBlock[],
+    options?: { cancellationSignal?: AbortSignal },
+  ) => Promise<PromptResponse>;
+  /**
+   * Called for every update as it lands, before it reaches `updates`.
+   *
+   * Tests use it to act at an exact point of the turn — cancelling, say, the
+   * moment the agent reports a tool call as in progress.
+   */
+  onUpdate?: (update: SessionUpdate) => void;
   /** Waits until `predicate` holds over the streamed updates. */
   waitFor: (predicate: () => boolean, timeoutMs?: number) => Promise<void>;
 };
@@ -70,7 +82,9 @@ type BaseOptions = {
     terminal?: boolean;
     session?: ClientSessionCapabilities;
   };
-  answerPermission?: (request: RequestPermissionRequest) => string | null;
+  answerPermission?: (
+    request: RequestPermissionRequest,
+  ) => string | null | Promise<string | null>;
   /**
    * Leave `session/new` to the test: `runScenario` normally opens one before
    * the scenario runs, which is exactly what a test asserting on `session/new`
@@ -210,10 +224,10 @@ function buildClientApp(options: BaseOptions): ClientAppWithHarness {
   const app = createClientApp({ name: "test-client" });
 
   if (!options.permissionUnsupported) {
-    app.onRequest(methods.client.session.requestPermission, ({ params }) => {
+    app.onRequest(methods.client.session.requestPermission, async ({ params }) => {
       harness.permissionRequests.push(params);
       const answer = harness.answerPermission
-        ? harness.answerPermission(params)
+        ? await harness.answerPermission(params)
         : (params.options.find((option) => option.kind.startsWith("allow"))?.optionId ?? null);
 
       return answer === null
@@ -310,13 +324,15 @@ async function runScenario(
   await builder.withSession(async (session) => {
     harness.session = session;
 
-    harness.prompt = (input) => {
-      const pending = session.prompt(input);
+    harness.prompt = (input, options) => {
+      const pending = session.prompt(input, options);
       // Drain updates concurrently so nothing is dropped while the turn runs.
       // A failed turn ends this loop with the same error the prompt rejects
       // with, which is already asserted by the caller: swallowing it here
       // keeps it from surfacing as an unhandled rejection.
-      void drainUntilStop(session, harness.updates).catch(() => {});
+      void drainUntilStop(session, harness.updates, (update) => harness.onUpdate?.(update)).catch(
+        () => {},
+      );
       return pending;
     };
     harness.waitFor = (predicate, timeoutMs = 5_000) =>
@@ -326,10 +342,15 @@ async function runScenario(
   });
 }
 
-async function drainUntilStop(session: ActiveSession, sink: SessionUpdate[]): Promise<void> {
+async function drainUntilStop(
+  session: ActiveSession,
+  sink: SessionUpdate[],
+  onUpdate?: (update: SessionUpdate) => void,
+): Promise<void> {
   for (;;) {
     const message = await session.nextUpdate();
     if (message.kind === "stop") return;
+    onUpdate?.(message.update);
     sink.push(message.update);
   }
 }

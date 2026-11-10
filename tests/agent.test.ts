@@ -55,7 +55,12 @@ async function withAgent(
   turns: FakeTurn[],
   overrides: Partial<AgentConfig>,
   op: (args: OpArgs) => Promise<void>,
-  knobs: { client?: ClientKnobs; llm?: FakeLlmOptions } = {},
+  knobs: {
+    client?: ClientKnobs;
+    llm?: FakeLlmOptions;
+    agent?: { catalogTtlMs?: number };
+    pollinations?: { timeoutMs?: number; baseUrl?: string };
+  } = {},
 ): Promise<void> {
   const server = await startFakeLlmServer(turns, knobs.llm ?? {});
   servers.push(server);
@@ -76,7 +81,13 @@ async function withAgent(
 
   const agent = createPollinationsAgent({
     config,
-    llm: new PollinationsLlm({ apiKey: config.apiKey, baseUrl: config.baseUrl, model: config.model }),
+    llm: new PollinationsLlm({
+      apiKey: config.apiKey,
+      baseUrl: config.baseUrl,
+      model: config.model,
+      ...(knobs.pollinations ?? {}),
+    }),
+    ...(knobs.agent ?? {}),
   });
 
   await withInProcessClient(agent, { cwd: workspace.path, ...(knobs.client ?? {}) }, async (harness) => {
@@ -485,6 +496,136 @@ describe("createPollinationsAgent", () => {
       const response = await pending;
       expect(response.stopReason).toBe("cancelled");
     });
+  });
+
+  it("cancels the turn when the client cancels the prompt request", async () => {
+    await withAgent([{ text: "x".repeat(500), stallMs: 40 }], {}, async ({ harness }) => {
+      const controller = new AbortController();
+      const pending = harness.prompt("long turn", { cancellationSignal: controller.signal });
+
+      await harness.waitFor(() =>
+        harness.updates.some((u) => (u as { sessionUpdate?: string }).sessionUpdate === "agent_message_chunk"),
+      );
+      // Walking away from the request itself is a different signal from
+      // `session/cancel`: it reaches the agent as the prompt's own abort,
+      // which the handler has to forward to the turn it started.
+      controller.abort();
+
+      const response = await pending;
+      expect(response.stopReason).toBe("cancelled");
+    });
+  });
+
+  it("cancels once the model has finished streaming", async () => {
+    await withAgent(
+      [{ text: "all done", usage: { prompt_tokens: 10, completion_tokens: 4 } }],
+      { compactionThresholdTokens: 100 },
+      async ({ harness }) => {
+        const pending = harness.prompt("finish");
+        // The stream is over within a few milliseconds; the catalogue read
+        // that follows keeps the turn busy for far longer, so a cancel sent
+        // in between reaches the abort check that follows it.
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        await harness.ctx.notify("session/cancel", { sessionId: harness.session.sessionId });
+
+        const response = await pending;
+        expect(response.stopReason).toBe("cancelled");
+      },
+      { agent: { catalogTtlMs: 0 }, llm: { modelsDelayMs: 400 } },
+    );
+  });
+
+  it("keeps the turn running when the transcript cannot be written", async () => {
+    const blocker = await createTmpDir("acp-persist-block");
+    cleanups.push(blocker.cleanup);
+    // A file where the store expects a directory makes every write fail.
+    const sessionsDir = join(blocker.path, "sessions");
+    await writeFile(sessionsDir, "not a directory");
+
+    await withAgent([{ text: "still works" }], { sessionsDir }, async ({ harness }) => {
+      const response = await harness.prompt("hello");
+
+      // Losing a transcript is reported, not fatal: the turn still answers.
+      expect(response.stopReason).toBe("end_turn");
+      expect(agentText(harness.updates)).toContain("still works");
+    });
+  });
+
+  it("reports a model request the endpoint never answered as cancelled", async () => {
+    await withAgent(
+      [{ text: "first piece", stallMs: 5_000 }],
+      {},
+      async ({ harness }) => {
+        // The endpoint stalls after the first frame, so the client's own
+        // timeout — not a cancel from the test — is what aborts the request.
+        await expect(harness.prompt("slow answer")).rejects.toThrow();
+      },
+      { pollinations: { timeoutMs: 150 } },
+    );
+  });
+
+  it("tells the client when a request cannot even be addressed", async () => {
+    await withAgent([{ text: "unused" }], {}, async ({ harness }) => {
+      // An endpoint the client cannot parse fails before any network call, so
+      // the turn has nothing to report but the failure itself.
+      await expect(harness.prompt("hello")).rejects.toThrow();
+    }, { pollinations: { baseUrl: "not a url" } });
+  });
+
+  it("stops the tool round when the client cancels mid-permission", async () => {
+    await withAgent(
+      [
+        {
+          toolCalls: [
+            { name: "write_file", arguments: JSON.stringify({ path: "one.txt", content: "1" }) },
+            { name: "write_file", arguments: JSON.stringify({ path: "two.txt", content: "2" }) },
+          ],
+        },
+        { text: "done" },
+      ],
+      {},
+      async ({ cwd, harness }) => {
+        // The cancel is sent and flushed before the answer, so the agent sees
+        // it while it is still waiting for permission.
+        harness.answerPermission = async () => {
+          await harness.ctx.notify("session/cancel", { sessionId: harness.session.sessionId });
+          return "allow-once";
+        };
+
+        const response = await harness.prompt("write both");
+
+        expect(response.stopReason).toBe("cancelled");
+        expect(await readFile(join(cwd, "one.txt"), "utf8")).toBe("1");
+        // The second call never got its turn.
+        await expect(readFile(join(cwd, "two.txt"), "utf8")).rejects.toThrow();
+      },
+    );
+  });
+
+  it("stops before a tool runs when the client cancels as it is announced", async () => {
+    await withAgent(
+      [
+        {
+          toolCalls: [
+            { name: "write_file", arguments: JSON.stringify({ path: "never.txt", content: "x" }) },
+          ],
+        },
+        { text: "done" },
+      ],
+      {},
+      async ({ cwd, harness }) => {
+        harness.onUpdate = (update) => {
+          if (update.sessionUpdate === "tool_call") {
+            void harness.ctx.notify("session/cancel", { sessionId: harness.session.sessionId });
+          }
+        };
+
+        const response = await harness.prompt("write never.txt");
+
+        expect(response.stopReason).toBe("cancelled");
+        await expect(readFile(join(cwd, "never.txt"), "utf8")).rejects.toThrow();
+      },
+    );
   });
 
   it("surfaces a session-not-found error for an unknown session id", async () => {
@@ -1458,6 +1599,31 @@ describe("compaction", () => {
                   ? { usage: { prompt_tokens: 5_000, completion_tokens: 10 } }
                   : {}),
               },
+      },
+    );
+  });
+
+  it("stops the turn when the client cancels while the transcript is compacted", async () => {
+    await withOverflowingSession(
+      100,
+      { session: { compaction: {}, notices: {} } },
+      async ({ harness }) => {
+        harness.onUpdate = (update) => {
+          if (update.sessionUpdate === "compaction_update") {
+            void harness.ctx.notify("session/cancel", { sessionId: harness.session.sessionId });
+          }
+        };
+
+        // The abort lands while the summarising request is in flight, so the
+        // loop that drives the model is entered with the turn already given
+        // up — the check at the top of it is what has to notice.
+        const response = await harness.prompt("the second question");
+
+        expect(response.stopReason).toBe("cancelled");
+        const lifecycle = harness.updates
+          .filter((update) => update.sessionUpdate === "compaction_update")
+          .map((update) => String((update as { status?: unknown }).status));
+        expect(lifecycle).toEqual(["in_progress", "cancelled"]);
       },
     );
   });

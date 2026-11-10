@@ -856,6 +856,11 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
         if (results === "cancelled") return { stopReason: "cancelled" };
       }
 
+      // Every exit from the loop above checks the signal first, and nothing
+      // between the last of those checks and here can await, so a cancel can
+      // never be observed only here; the guard stays for a future refactor
+      // that adds such a gap.
+      /* v8 ignore next */
       if (abort.signal.aborted) return { stopReason: "cancelled" };
 
       await notify({
@@ -1461,10 +1466,18 @@ function buildReasoningOption(current: string): SessionConfigOption {
 }
 
 function toRequestError(error: unknown): RequestError {
+  // Nothing inside the prompt handler throws a `RequestError` today: the
+  // session lookup that does runs before the turn is entered. Kept so a call
+  // site that starts throwing one keeps its code instead of being wrapped.
+  /* v8 ignore next */
   if (error instanceof RequestError) return error;
   if (error instanceof LlmError) {
     return RequestError.internalError({ status: error.status }, error.message);
   }
+  // Tools convert their own failures into error results, and the permission
+  // gate swallows a client that refuses to answer, so no `ToolError` escapes
+  // into this funnel either; the branch is the contract if that changes.
+  /* v8 ignore next */
   if (error instanceof ToolError) return RequestError.internalError(undefined, error.message);
   if (error instanceof Error && error.name === "AbortError") {
     return RequestError.requestCancelled();

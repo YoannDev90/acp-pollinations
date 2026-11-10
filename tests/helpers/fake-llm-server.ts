@@ -56,6 +56,14 @@ export type FakeLlmOptions = {
    */
   failModelsWith?: { status: number; body: string; times?: number };
   /**
+   * Delay before `GET /v1/models` is answered.
+   *
+   * The catalogue read is the only thing a turn waits on once the stream has
+   * ended, so stretching it widens the window in which a cancel lands after
+   * the model has answered but before the turn reports its stop reason.
+   */
+  modelsDelayMs?: number;
+  /**
    * Picks the turn from the request itself, overriding `turns`. Needed when one
    * server has to answer prompts it cannot tell apart in advance: the
    * conformance harness stalls only the cancellation prompt, and has no way to
@@ -170,8 +178,12 @@ export async function startFakeLlmServer(
         res.end(failure.body);
         return;
       }
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(options.modelsPayload ?? FAKE_MODELS_PAYLOAD));
+      const answer = () => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(options.modelsPayload ?? FAKE_MODELS_PAYLOAD));
+      };
+      if (options.modelsDelayMs) setTimeout(answer, options.modelsDelayMs);
+      else answer();
       return;
     }
 
