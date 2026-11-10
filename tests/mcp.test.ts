@@ -142,7 +142,17 @@ async function startHttpServer(options: {
  * reply, while the POST endpoint only acknowledges the request — which is how
  * the transport actually works, and the shape the old parser could never read.
  */
-async function startSseServer(options: { sendEndpoint?: boolean } = {}): Promise<{
+async function startSseServer(
+  options: {
+    sendEndpoint?: boolean;
+    /** The GET never answers at all, so only the connect deadline can fire. */
+    stall?: boolean;
+    /** Status the GET answers with instead of an event stream. */
+    status?: number;
+    /** Status the POST answers with instead of acknowledging. */
+    postStatus?: number;
+  } = {},
+): Promise<{
   url: string;
   close: () => Promise<void>;
 }> {
@@ -151,6 +161,11 @@ async function startSseServer(options: { sendEndpoint?: boolean } = {}): Promise
 
   const server = createServer((req, res) => {
     if (req.method === "GET") {
+      if (options.stall) return;
+      if (options.status) {
+        res.writeHead(options.status, { "Content-Type": "text/plain" }).end("not an event stream");
+        return;
+      }
       res.writeHead(200, { "Content-Type": "text/event-stream" });
       // Headers have to leave now: with nothing else to write, Node would
       // hold them until the first frame and the client's connect deadline
@@ -170,6 +185,10 @@ async function startSseServer(options: { sendEndpoint?: boolean } = {}): Promise
       raw += chunk.toString("utf8");
     });
     req.on("end", () => {
+      if (options.postStatus) {
+        res.writeHead(options.postStatus, { "Content-Type": "text/plain" }).end("no");
+        return;
+      }
       res.writeHead(202).end();
       let body: { id?: number; method?: string } = {};
       try {
@@ -508,6 +527,42 @@ describe("MCP SSE transport", () => {
     await server.close();
 
     expect(await pending).toEqual([]);
+  });
+
+  it("aborts the handshake when the stream never answers", async () => {
+    const server = await startSseServer({ stall: true });
+    try {
+      // Nothing is written on the GET, so the connect deadline is the only
+      // thing that can end this: the abort has to reach the fetch itself.
+      await expect(
+        connectSseMcpServer({ type: "sse", url: server.url, name: "stalled" }, FAST),
+      ).rejects.toThrow(/abort/i);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects when the stream answers with a failure status", async () => {
+    const server = await startSseServer({ status: 500 });
+    try {
+      await expect(
+        connectSseMcpServer({ type: "sse", url: server.url, name: "refused" }, FAST),
+      ).rejects.toThrow(/MCP SSE connection failed \(500\)/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("degrades when the request endpoint refuses to answer", async () => {
+    const server = await startSseServer({ postStatus: 503 });
+    try {
+      // The stream is fine but the POST side is not; the connection must come
+      // back empty with a log line rather than throw at the caller.
+      const connection = await connectSseMcpServer({ type: "sse", url: server.url }, FAST);
+      expect(connection.tools).toEqual([]);
+    } finally {
+      await server.close();
+    }
   });
 });
 
