@@ -1,4 +1,4 @@
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 
@@ -412,6 +412,22 @@ describe("executeTool", () => {
       const { context } = await makeWorkspace();
       await expectFailure(executeTool("glob", {}, context), /`pattern` is required/);
     });
+
+    it("stops walking at the result ceiling", async () => {
+      const { path, context } = await makeWorkspace();
+      // 200 results are allowed, so 201 candidates guarantee the walk has to
+      // stop on its own rather than build an unbounded list.
+      await Promise.all(
+        Array.from({ length: 201 }, (_unused, index) =>
+          writeFile(join(path, `f${String(index).padStart(3, "0")}.txt`), ""),
+        ),
+      );
+
+      const result = await executeTool("glob", { pattern: "*.txt", path }, context);
+
+      expectSuccess(result);
+      expect(result.output.split("\n")).toHaveLength(200);
+    });
   });
 
   describe("grep", () => {
@@ -468,6 +484,36 @@ describe("executeTool", () => {
 
       expectSuccess(result);
       expect(result.output).toMatch(/No matches/);
+    });
+
+    it("stops at the match limit and says so", async () => {
+      const { path, context } = await makeWorkspace();
+      await writeFile(join(path, "one.txt"), "needle\n");
+      await writeFile(join(path, "two.txt"), "needle\n");
+
+      const result = await executeTool("grep", { pattern: "needle", path, limit: 1 }, context);
+
+      // One match line plus the marker: the walk stopped instead of scanning
+      // everything and trimming afterwards.
+      expect(result.output.split("\n")).toHaveLength(2);
+      expect(result.output).toMatch(/match limit reached/);
+    });
+
+    it("skips directories and entries it cannot read", async () => {
+      const { path, context } = await makeWorkspace();
+      await mkdir(join(path, "sub"));
+      await writeFile(join(path, "sub", "hit.txt"), "needle\n");
+      await writeFile(join(path, "ok.txt"), "needle\n");
+      // A dangling name is listed by the walk but has nothing to stat or
+      // open; it must cost a skip, not a failed grep.
+      await symlink(join(path, "gone.txt"), join(path, "dangling"));
+
+      const result = await executeTool("grep", { pattern: "needle", path }, context);
+
+      expectSuccess(result);
+      expect(result.output).toContain("hit.txt");
+      expect(result.output).toContain("ok.txt");
+      expect(result.output).not.toContain("dangling");
     });
   });
 
