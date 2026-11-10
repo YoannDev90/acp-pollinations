@@ -456,8 +456,12 @@ export async function connectSseMcpServer(
     failed: (error: Error) => void;
   } = {
     settled: false,
+    /* v8 ignore start -- placeholders: the executor below replaces both
+       before anything can call them, and the literals only exist so the
+       object is typed as complete */
     ready: () => undefined,
     failed: () => undefined,
+    /* v8 ignore stop */
   };
   const endpointPromise = new Promise<string>((resolve, reject) => {
     endpoint.ready = resolve;
@@ -552,8 +556,10 @@ export async function connectSseMcpServer(
     // stream, so one that answers as soon as it has the request could reply
     // before a registration made after `await fetch(...)` landed.
     const slot: { resolve: (value: unknown) => void; reject: (error: Error) => void } = {
+      /* v8 ignore start -- same placeholder pattern as the endpoint above */
       resolve: () => undefined,
       reject: () => undefined,
+      /* v8 ignore stop */
     };
     const reply = new Promise<unknown>((resolve, reject) => {
       slot.resolve = resolve;
@@ -631,7 +637,10 @@ export async function connectSseMcpServer(
   };
 
   // Avoid unhandled rejection from the background pump.
+  /* v8 ignore start -- the handler itself is never invoked: the pump is
+     written to resolve, and this exists only to catch it if it ever doesn't */
   void pump.catch(() => undefined);
+  /* v8 ignore stop */
 
   return { name: serverName, tools, bindings, toolDefinitions, close };
 }

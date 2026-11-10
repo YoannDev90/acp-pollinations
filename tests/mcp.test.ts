@@ -151,6 +151,12 @@ async function startSseServer(
     status?: number;
     /** Status the POST answers with instead of acknowledging. */
     postStatus?: number;
+    /** Answers every request but never pushes a reply for a `tools/call`. */
+    ignoreCalls?: boolean;
+    /** Ends the GET stream while a `tools/call` is still in flight. */
+    dropOnCall?: boolean;
+    /** Pushes a JSON-RPC error for a `tools/call` instead of a result. */
+    errorOnCall?: boolean;
   } = {},
 ): Promise<{
   url: string;
@@ -197,6 +203,25 @@ async function startSseServer(
         return;
       }
       if (body.id === undefined) return;
+
+      // The push transport fails three ways once the handshake is over: the
+      // reply never comes, the stream is cut with a call in flight, or what
+      // arrives is an error instead of a result.
+      if (body.method === "tools/call" && options.ignoreCalls) return;
+      if (body.method === "tools/call" && options.dropOnCall) {
+        stream?.end();
+        return;
+      }
+      if (body.method === "tools/call" && options.errorOnCall) {
+        stream?.write(
+          `event: message\ndata: ${JSON.stringify({
+            jsonrpc: "2.0",
+            id: body.id,
+            error: { message: "push side refused the call" },
+          })}\n\n`,
+        );
+        return;
+      }
 
       const result =
         body.method === "initialize"
@@ -560,6 +585,77 @@ describe("MCP SSE transport", () => {
       // back empty with a log line rather than throw at the caller.
       const connection = await connectSseMcpServer({ type: "sse", url: server.url }, FAST);
       expect(connection.tools).toEqual([]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("fails a call that was in flight when the stream ended", async () => {
+    const server = await startSseServer({ dropOnCall: true });
+    try {
+      const connection = await connectSseMcpServer({ type: "sse", url: server.url }, FAST);
+      expect(connection.tools.map((tool) => tool.name)).toEqual(["ping"]);
+
+      // The POST was acknowledged, so only the GET stream can tell us the
+      // answer is never coming; every waiting call has to hear about it.
+      const result = await connection.bindings.get("ping")?.call({});
+      expect(result?.isError).toBe(true);
+      expect(result?.output).toMatch(/stream closed/i);
+
+      connection.close();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("reports a JSON-RPC error pushed on the stream", async () => {
+    const server = await startSseServer({ errorOnCall: true });
+    try {
+      const connection = await connectSseMcpServer({ type: "sse", url: server.url }, FAST);
+      const result = await connection.bindings.get("ping")?.call({});
+      expect(result?.isError).toBe(true);
+      expect(result?.output).toBe("push side refused the call");
+
+      connection.close();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("times out a call whose reply is never pushed", async () => {
+    const server = await startSseServer({ ignoreCalls: true });
+    try {
+      const connection = await connectSseMcpServer(
+        { type: "sse", url: server.url },
+        { connectMs: 500, requestMs: 150 },
+      );
+      const result = await connection.bindings.get("ping")?.call({});
+      expect(result).toEqual({
+        output: 'MCP request "tools/call" timed out',
+        isError: true,
+      });
+
+      connection.close();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("fails in-flight calls when the connection is closed", async () => {
+    const server = await startSseServer({ ignoreCalls: true });
+    try {
+      const connection = await connectSseMcpServer(
+        { type: "sse", url: server.url },
+        { connectMs: 500, requestMs: 5_000 },
+      );
+      const pending = connection.bindings.get("ping")?.call({});
+      connection.close();
+
+      const result = await pending;
+      expect(result?.isError).toBe(true);
+      // Whichever side settles it first — the close or the stream it cuts —
+      // the caller gets a closed-connection failure rather than a hang.
+      expect(result?.output).toMatch(/closed/i);
     } finally {
       await server.close();
     }
