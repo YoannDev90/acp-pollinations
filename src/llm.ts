@@ -1,5 +1,5 @@
 import { DEFAULT_MODEL } from "./config.js";
-import { isRetryableStatus, retryDelayMs, sleep } from "./net.js";
+import { isRetryableStatus, retryDelayMs, sleep, stripTrailingSlashes } from "./net.js";
 import { createSseParser } from "./sse.js";
 
 /**
@@ -136,7 +136,7 @@ export class PollinationsLlm {
   constructor(options: PollinationsLlmOptions) {
     if (!options.apiKey) throw new LlmError("A Pollinations API key is required");
     this.apiKey = options.apiKey;
-    this.baseUrl = (options.baseUrl ?? "https://gen.pollinations.ai").replace(/\/+$/, "");
+    this.baseUrl = stripTrailingSlashes(options.baseUrl ?? "https://gen.pollinations.ai");
     this.model = options.model ?? DEFAULT_MODEL;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutMs = options.timeoutMs ?? 600_000;

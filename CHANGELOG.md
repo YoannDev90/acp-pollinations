@@ -46,6 +46,17 @@ first time in 1.0.0.
 
 ### Security
 
+- Base URL normalisation no longer uses the trailing-slash regex
+  `/\/+$/`: the value comes from the environment or a config file, so an
+  uncontrolled run of slashes could make the pattern backtrack quadratically.
+  The three call sites now share `stripTrailingSlashes`, a linear scan, which
+  clears the three open CodeQL `js/polynomial-redos` alerts.
+- `minimatch` is pinned to `^11.0.1` through an npm `overrides` entry, moving
+  every transitive copy (eslint, `@eslint/config-array`,
+  `@typescript-eslint/typescript-estree`) past GHSA-g3hv-75wg-m249
+  (globparts amplification). No patched release exists in the ranges those
+  packages declare; v11 keeps the `Minimatch` class, `.match()`, and the
+  options shape they use, so behaviour is unchanged.
 - Workspace confinement checks every path lexically and again after `realpath`
   so a symlink cannot escape the session roots; client-supplied session ids
   are validated before they reach a filename; mutating tools require a client

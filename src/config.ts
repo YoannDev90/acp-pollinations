@@ -2,6 +2,8 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { stripTrailingSlashes } from "./net.js";
+
 /** Default Pollinations API base URL (OpenAI-compatible). */
 export const DEFAULT_BASE_URL = "https://gen.pollinations.ai";
 
@@ -186,7 +188,7 @@ export function resolveEnvConfig(
 
   return {
     apiKey,
-    baseUrl: baseUrl.replace(/\/+$/, ""),
+    baseUrl: stripTrailingSlashes(baseUrl),
     model,
     maxTurnRequests:
       Number.isFinite(maxTurnRequests) && maxTurnRequests > 0

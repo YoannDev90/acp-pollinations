@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isRetryableStatus, retryDelayMs, sleep } from "../src/net.js";
+import { isRetryableStatus, retryDelayMs, sleep, stripTrailingSlashes } from "../src/net.js";
 
 /** A response carrying only the headers the backoff reads. */
 function responseWith(headers: Record<string, string>): Response {
@@ -72,5 +72,27 @@ describe("sleep", () => {
     controller.abort();
 
     await expect(sleep(10_000, controller.signal)).rejects.toThrow("aborted");
+  });
+});
+
+describe("stripTrailingSlashes", () => {
+  it("removes one trailing slash", () => {
+    expect(stripTrailingSlashes("https://example.test/")).toBe("https://example.test");
+  });
+
+  it("removes a whole run of them", () => {
+    expect(stripTrailingSlashes("https://example.test///")).toBe("https://example.test");
+    // A path made only of slashes collapses to the empty string, exactly as
+    // the regex it replaces did.
+    expect(stripTrailingSlashes("///")).toBe("");
+  });
+
+  it("leaves a URL without trailing slashes alone", () => {
+    expect(stripTrailingSlashes("https://example.test")).toBe("https://example.test");
+    expect(stripTrailingSlashes("")).toBe("");
+  });
+
+  it("keeps slashes that are not trailing", () => {
+    expect(stripTrailingSlashes("https://example.test/v1/models")).toBe("https://example.test/v1/models");
   });
 });

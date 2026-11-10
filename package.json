@@ -66,5 +66,9 @@
   },
   "engines": {
     "node": ">=22"
+  },
+  "//overrides": "minimatch <11.0.1 is vulnerable to globparts amplification (GHSA-g3hv-75wg-m249) and eslint/typescript-eslint pin it transitively; no patched release exists in their declared range. v11 keeps the Minimatch class, .match(), and the options shape these consumers use.",
+  "overrides": {
+    "minimatch": "^11.0.1"
   }
 }

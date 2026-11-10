@@ -1,6 +1,6 @@
 import type { SessionConfigOption, SessionConfigSelectOption } from "@agentclientprotocol/sdk";
 
-import { isRetryableStatus, retryDelayMs, sleep } from "./net.js";
+import { isRetryableStatus, retryDelayMs, sleep, stripTrailingSlashes } from "./net.js";
 
 /**
  * Pollinations model catalogue: fetch, classify, and render the model picker.
@@ -207,7 +207,7 @@ export async function fetchModelCatalog(
   options: FetchModelCatalogOptions,
 ): Promise<CatalogModel[]> {
   const fetchImpl = options.fetchImpl ?? fetch;
-  const baseUrl = options.baseUrl.replace(/\/+$/, "");
+  const baseUrl = stripTrailingSlashes(options.baseUrl);
   const url = `${baseUrl}/v1/models`;
   const maxAttempts = 3;
 

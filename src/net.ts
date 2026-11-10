@@ -1,11 +1,29 @@
 /**
- * Shared HTTP retry helpers.
+ * Shared HTTP helpers.
  *
  * The chat stream and the model catalogue meet the same transient failures —
  * a rate limit, a proxy answering 502 while the upstream restarts, a socket
  * that resets mid-connect — and answer them the same way. The backoff lives
  * here so the two cannot drift into different notions of "worth retrying".
+ *
+ * Base URLs land here for the same reason: one definition of a usable
+ * endpoint, shared by the config loader and both request paths.
  */
+
+/**
+ * Removes every trailing slash from a base URL.
+ *
+ * Not `url.replace(/\/+$/, "")`: the base URL comes from the environment or
+ * a config file, so the input is uncontrolled, and that pattern makes the
+ * engine retry the quantifier at every offset of a slash run — quadratic
+ * time, which CodeQL reports as a polynomial regular expression. Scanning
+ * backwards once is linear and matches the same set of inputs.
+ */
+export function stripTrailingSlashes(url: string): string {
+  let end = url.length;
+  while (end > 0 && url.charCodeAt(end - 1) === 47 /* "/" */) end -= 1;
+  return end === url.length ? url : url.slice(0, end);
+}
 
 /** Whether a failed response is worth retrying (rate limits, transient 5xx). */
 export function isRetryableStatus(status: number, body: string): boolean {
