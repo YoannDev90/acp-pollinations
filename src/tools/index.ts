@@ -722,12 +722,12 @@ async function runViaClientTerminal(command: string, ctx: ToolContext): Promise<
   });
 
   try {
+    /* v8 ignore start -- the whole handler runs only when the 120s ceiling
+       elapses, which no test waits out */
     const killTimer = setTimeout(() => {
-      /* v8 ignore start -- runs only when the 120s ceiling elapses, which no
-         test waits out */
       void handle.kill().catch(() => undefined);
-      /* v8 ignore stop */
     }, BASH_TIMEOUT_MS);
+    /* v8 ignore stop */
 
     try {
       const exit = await handle.waitForExit();
