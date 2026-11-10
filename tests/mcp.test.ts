@@ -50,9 +50,11 @@ type Recorded = {
  * server-sent events to cover both response shapes the transport accepts.
  */
 async function startHttpServer(options: {
-  framing?: "json" | "sse";
+  framing?: "json" | "sse" | "sse-noise" | "sse-empty";
   sessionId?: string;
   status?: number;
+  /** Answers with a JSON-RPC `error` instead of a `result`. */
+  errorReply?: boolean;
 } = {}): Promise<{ url: string; requests: Recorded[]; close: () => Promise<void> }> {
   const requests: Recorded[] = [];
 
@@ -93,11 +95,26 @@ async function startHttpServer(options: {
             ? { tools: [{ name: "echo", description: "Echo", inputSchema: { type: "object" } }] }
             : { content: [{ type: "text", text: "from http" }] };
 
-      const payload = JSON.stringify({ jsonrpc: "2.0", id: body.id, result });
-      if (options.framing === "sse") {
-        res
-          .writeHead(200, { "Content-Type": "text/event-stream" })
-          .end(`event: message\ndata: ${payload}\n\n`);
+      const payload = JSON.stringify(
+        options.errorReply
+          ? { jsonrpc: "2.0", id: body.id, error: { message: "server refused the handshake" } }
+          : { jsonrpc: "2.0", id: body.id, result },
+      );
+      const framing = options.framing ?? "json";
+      if (framing.startsWith("sse")) {
+        // Keep-alive frames, an end marker, and a reply to a request this
+        // client never sent all travel the same way as the real answer, so
+        // the parser has to skip them without mistaking one for its own.
+        const noise =
+          framing === "sse-noise"
+            ? `data:\n\ndata: [DONE]\n\ndata: ${JSON.stringify({
+                jsonrpc: "2.0",
+                id: 999,
+                result: { stale: true },
+              })}\n\n`
+            : "";
+        const reply = framing === "sse-empty" ? "data: [DONE]\n\n" : `event: message\ndata: ${payload}\n\n`;
+        res.writeHead(200, { "Content-Type": "text/event-stream" }).end(noise + reply);
         return;
       }
       const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -367,6 +384,41 @@ describe("MCP HTTP transport", () => {
     try {
       const connection = await connectHttpMcpServer({ type: "http", url: server.url }, FAST);
       expect(connection.tools.map((tool) => tool.name)).toEqual(["echo"]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("skips keep-alive frames and replies aimed at another request", async () => {
+    const server = await startHttpServer({ framing: "sse-noise" });
+    try {
+      const connection = await connectHttpMcpServer({ type: "http", url: server.url }, FAST);
+
+      // Empty data, a `[DONE]` marker, and a frame for a different id all
+      // precede the answer; none of them may be mistaken for it.
+      expect(connection.tools.map((tool) => tool.name)).toEqual(["echo"]);
+      const result = await connection.bindings.get("echo")?.call({});
+      expect(result?.output).toBe("from http");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("degrades when a stream reply never carries a result", async () => {
+    const server = await startHttpServer({ framing: "sse-empty" });
+    try {
+      const connection = await connectHttpMcpServer({ type: "http", url: server.url }, FAST);
+      expect(connection.tools).toEqual([]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("degrades when the handshake is refused with a JSON-RPC error", async () => {
+    const server = await startHttpServer({ errorReply: true });
+    try {
+      const connection = await connectHttpMcpServer({ type: "http", url: server.url }, FAST);
+      expect(connection.tools).toEqual([]);
     } finally {
       await server.close();
     }
