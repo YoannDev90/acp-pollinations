@@ -46,7 +46,9 @@ type Recorded = {
   method: string;
   sessionId: string | null;
   probe: string | null;
-  body: { id?: number; method?: string };
+  /** Cursor the client asked `tools/list` with, when it asked with one. */
+  cursor: string | null;
+  body: { id?: number; method?: string; params?: { cursor?: string } };
 };
 
 /**
@@ -62,8 +64,26 @@ async function startHttpServer(options: {
   status?: number;
   /** Answers with a JSON-RPC `error` instead of a `result`. */
   errorReply?: boolean;
+  /** Answers with a JSON-RPC `error` that carries no `message` field. */
+  errorReplyNoMessage?: boolean;
+  /** Leaves the `Content-Type` header off the reply. */
+  omitContentType?: boolean;
+  /** Gives `tools/list` a second page behind a `nextCursor`. */
+  paginated?: boolean;
+  /** Answers `tools/list` with a payload that has no tools array. */
+  listWithoutTools?: boolean;
 } = {}): Promise<{ url: string; requests: Recorded[]; close: () => Promise<void> }> {
   const requests: Recorded[] = [];
+
+  /** The `tools/list` answer the current option set calls for. */
+  function listReply(params: { cursor?: string } | undefined): unknown {
+    if (options.listWithoutTools) return { pageCount: 1 };
+    const first = [{ name: "echo", description: "Echo", inputSchema: { type: "object" } }];
+    if (!options.paginated) return { tools: first };
+    return params?.cursor === "page-2"
+      ? { tools: [{ name: "page-two", description: "Second page", inputSchema: { type: "object" } }] }
+      : { tools: first, nextCursor: "page-2" };
+  }
 
   const server = createServer((req, res) => {
     let raw = "";
@@ -71,9 +91,9 @@ async function startHttpServer(options: {
       raw += chunk.toString("utf8");
     });
     req.on("end", () => {
-      let body: { id?: number; method?: string } = {};
+      let body: { id?: number; method?: string; params?: { cursor?: string } } = {};
       try {
-        body = JSON.parse(raw) as { id?: number; method?: string };
+        body = JSON.parse(raw) as { id?: number; method?: string; params?: { cursor?: string } };
       } catch {
         // A malformed body still deserves an answer, just not a parsed one.
       }
@@ -81,6 +101,7 @@ async function startHttpServer(options: {
         method: req.method ?? "",
         sessionId: (req.headers["mcp-session-id"] as string | undefined) ?? null,
         probe: (req.headers["x-probe"] as string | undefined) ?? null,
+        cursor: body.params?.cursor ?? null,
         body,
       });
 
@@ -99,13 +120,15 @@ async function startHttpServer(options: {
         body.method === "initialize"
           ? { protocolVersion: "2025-06-18", capabilities: {}, serverInfo: { name: "http-fake", version: "1" } }
           : body.method === "tools/list"
-            ? { tools: [{ name: "echo", description: "Echo", inputSchema: { type: "object" } }] }
+            ? listReply(body.params)
             : { content: [{ type: "text", text: "from http" }] };
 
       const payload = JSON.stringify(
         options.errorReply
           ? { jsonrpc: "2.0", id: body.id, error: { message: "server refused the handshake" } }
-          : { jsonrpc: "2.0", id: body.id, result },
+          : options.errorReplyNoMessage
+            ? { jsonrpc: "2.0", id: body.id, error: { code: -32000 } }
+            : { jsonrpc: "2.0", id: body.id, result },
       );
       const framing = options.framing ?? "json";
       if (framing.startsWith("sse")) {
@@ -124,7 +147,8 @@ async function startHttpServer(options: {
         res.writeHead(200, { "Content-Type": "text/event-stream" }).end(noise + reply);
         return;
       }
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      const headers: Record<string, string> = {};
+      if (!options.omitContentType) headers["Content-Type"] = "application/json";
       if (options.sessionId) headers["mcp-session-id"] = options.sessionId;
       res.writeHead(200, headers).end(payload);
     });
@@ -164,6 +188,14 @@ async function startSseServer(
     dropOnCall?: boolean;
     /** Pushes a JSON-RPC error for a `tools/call` instead of a result. */
     errorOnCall?: boolean;
+    /** Pushes a JSON-RPC error with no `message` field for a `tools/call`. */
+    errorOnCallNoMessage?: boolean;
+    /** Pushes a frame addressed to an id this client never issued. */
+    strayFrame?: boolean;
+    /** Gives `tools/list` a second page behind a `nextCursor`. */
+    paginated?: boolean;
+    /** Answers `tools/list` with a payload that has no tools array. */
+    listWithoutTools?: boolean;
   } = {},
 ): Promise<{
   url: string;
@@ -171,6 +203,16 @@ async function startSseServer(
 }> {
   const sendEndpoint = options.sendEndpoint ?? true;
   let stream: import("node:http").ServerResponse | null = null;
+
+  /** The `tools/list` answer the current option set calls for. */
+  function listReply(params: { cursor?: string } | undefined): unknown {
+    if (options.listWithoutTools) return { pageCount: 1 };
+    const first = [{ name: "ping", description: "Ping", inputSchema: { type: "object" } }];
+    if (!options.paginated) return { tools: first };
+    return params?.cursor === "page-2"
+      ? { tools: [{ name: "pong", description: "Pong", inputSchema: { type: "object" } }] }
+      : { tools: first, nextCursor: "page-2" };
+  }
 
   const server = createServer((req, res) => {
     if (req.method === "GET") {
@@ -187,6 +229,13 @@ async function startSseServer(
       stream = res;
       if (sendEndpoint) res.write("event: endpoint\ndata: /mcp\n\n");
       else res.write(": keep-alive\n\n");
+      // A frame aimed at an id this client never issued travels on the same
+      // stream as the real replies, so the parser has to skip it.
+      if (options.strayFrame) {
+        res.write(
+          `event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: 999, result: { stale: true } })}\n\n`,
+        );
+      }
       req.on("close", () => {
         stream = null;
       });
@@ -203,9 +252,9 @@ async function startSseServer(
         return;
       }
       res.writeHead(202).end();
-      let body: { id?: number; method?: string } = {};
+      let body: { id?: number; method?: string; params?: { cursor?: string } } = {};
       try {
-        body = JSON.parse(raw) as { id?: number; method?: string };
+        body = JSON.parse(raw) as { id?: number; method?: string; params?: { cursor?: string } };
       } catch {
         return;
       }
@@ -229,12 +278,22 @@ async function startSseServer(
         );
         return;
       }
+      if (body.method === "tools/call" && options.errorOnCallNoMessage) {
+        stream?.write(
+          `event: message\ndata: ${JSON.stringify({
+            jsonrpc: "2.0",
+            id: body.id,
+            error: { code: -32000 },
+          })}\n\n`,
+        );
+        return;
+      }
 
       const result =
         body.method === "initialize"
           ? { protocolVersion: "2025-06-18", capabilities: {}, serverInfo: { name: "sse-fake", version: "1" } }
           : body.method === "tools/list"
-            ? { tools: [{ name: "ping", description: "Ping", inputSchema: { type: "object" } }] }
+            ? listReply(body.params)
             : { content: [{ type: "text", text: "from sse" }] };
 
       stream?.write(
@@ -610,6 +669,66 @@ describe("MCP HTTP transport", () => {
       await server.close();
     }
   });
+
+  it("reads a reply that carries no content-type header", async () => {
+    const server = await startHttpServer({ omitContentType: true });
+    try {
+      const connection = await connectHttpMcpServer({ type: "http", url: server.url }, FAST);
+
+      // A missing header must not be mistaken for an event stream: the body
+      // is plain JSON and parses the same way with or without the header.
+      expect(connection.tools.map((tool) => tool.name)).toEqual(["echo"]);
+      expect((await connection.bindings.get("echo")?.call({}))?.output).toBe("from http");
+      connection.close();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("maps a JSON-RPC error that carries no message", async () => {
+    const server = await startHttpServer({ errorReplyNoMessage: true });
+    try {
+      const connection = await connectHttpMcpServer({ type: "http", url: server.url }, FAST);
+
+      // An error with no `message` still fails the handshake, with generic
+      // text rather than `undefined` in the log line.
+      expect(connection.tools).toEqual([]);
+      connection.close();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("follows nextCursor across tools/list pages", async () => {
+    const server = await startHttpServer({ paginated: true });
+    try {
+      const connection = await connectHttpMcpServer({ type: "http", url: server.url }, FAST);
+
+      expect(connection.tools.map((tool) => tool.name)).toEqual(["echo", "page-two"]);
+      // The cursor the first page handed out has to travel back as
+      // `params.cursor`, or the second page is fetched as the first forever.
+      expect(
+        server.requests
+          .filter((request) => request.body.method === "tools/list")
+          .map((request) => request.cursor),
+      ).toEqual([null, "page-2"]);
+      connection.close();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("stops the HTTP walk when tools/list answers without a tools array", async () => {
+    const server = await startHttpServer({ listWithoutTools: true });
+    try {
+      const connection = await connectHttpMcpServer({ type: "http", url: server.url }, FAST);
+
+      expect(connection.tools).toEqual([]);
+      connection.close();
+    } finally {
+      await server.close();
+    }
+  });
 });
 
 describe("MCP SSE transport", () => {
@@ -766,6 +885,57 @@ describe("MCP SSE transport", () => {
       // Whichever side settles it first — the close or the stream it cuts —
       // the caller gets a closed-connection failure rather than a hang.
       expect(result?.output).toMatch(/closed/i);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("ignores a pushed frame aimed at an id it never issued", async () => {
+    const server = await startSseServer({ strayFrame: true });
+    try {
+      const connection = await connectSseMcpServer({ type: "sse", url: server.url }, FAST);
+
+      // The stray frame settles nothing; the real replies still arrive on
+      // the same stream and in the same order.
+      expect((await connection.bindings.get("ping")?.call({}))?.output).toBe("from sse");
+      connection.close();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("maps a pushed error that carries no message", async () => {
+    const server = await startSseServer({ errorOnCallNoMessage: true });
+    try {
+      const connection = await connectSseMcpServer({ type: "sse", url: server.url }, FAST);
+
+      expect(await connection.bindings.get("ping")?.call({})).toEqual({
+        output: "MCP request failed",
+        isError: true,
+      });
+      connection.close();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("follows nextCursor across pushed tools/list pages", async () => {
+    const server = await startSseServer({ paginated: true });
+    try {
+      const connection = await connectSseMcpServer({ type: "sse", url: server.url }, FAST);
+      expect(connection.tools.map((tool) => tool.name)).toEqual(["ping", "pong"]);
+      connection.close();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("stops the SSE walk when tools/list answers without a tools array", async () => {
+    const server = await startSseServer({ listWithoutTools: true });
+    try {
+      const connection = await connectSseMcpServer({ type: "sse", url: server.url }, FAST);
+      expect(connection.tools).toEqual([]);
+      connection.close();
     } finally {
       await server.close();
     }
