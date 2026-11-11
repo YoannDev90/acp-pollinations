@@ -580,8 +580,9 @@ async function grepTool(
     if (content === null) continue;
 
     const lines = content.split("\n");
-    for (let index = 0; index < lines.length; index += 1) {
-      const line = lines[index] ?? "";
+    // Iterating entries keeps `line` typed as a string, so no undefined
+    // guard is needed the way an indexed read would require one.
+    for (const [index, line] of lines.entries()) {
       expression.lastIndex = 0;
       if (!expression.test(line)) continue;
 
