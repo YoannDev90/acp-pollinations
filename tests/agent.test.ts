@@ -650,6 +650,71 @@ describe("createPollinationsAgent", () => {
     );
   });
 
+  it("prices a free model that publishes no amounts at zero", async () => {
+    await withAgent(
+      [{ text: "free answer", usage: { prompt_tokens: 100, completion_tokens: 50 } }],
+      {},
+      async ({ harness }) => {
+        // The only place the two answers differ is the turn's cost log: a
+        // missing price stays "unknown" unless the group says it is free.
+        const lines: string[] = [];
+        const spy = vi
+          .spyOn(process.stderr, "write")
+          .mockImplementation((chunk: string | Uint8Array) => {
+            lines.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+            return true;
+          });
+        try {
+          const response = await harness.prompt("hello");
+          expect(response.stopReason).toBe("end_turn");
+        } finally {
+          spy.mockRestore();
+        }
+
+        expect(lines.some((line) => line.includes("cost=0.000000 pollen"))).toBe(true);
+        expect(lines.some((line) => line.includes("cost=unknown"))).toBe(false);
+      },
+      {
+        llm: {
+          // A community model with no published amounts: the catalogue groups
+          // it as free, which is what turns an absent price into 0.
+          modelsPayload: {
+            object: "list",
+            data: [
+              {
+                id: "test-model",
+                title: "Free Test",
+                category: "text",
+                community: true,
+                tools: true,
+              },
+            ],
+          },
+        },
+      },
+    );
+  });
+
+  it("leaves the abort field to a second prompt that replaced it", async () => {
+    await withAgent(
+      [{ text: "first answer", stallMs: 300 }, { text: "second answer" }],
+      {},
+      async ({ harness }) => {
+        const first = harness.prompt("first question");
+        // Let the second prompt start while the first is still streaming: it
+        // overwrites `session.abort`, so the first turn's cleanup must not
+        // clear the controller the second one now owns.
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        const second = harness.prompt("second question");
+
+        const [firstResponse, secondResponse] = await Promise.all([first, second]);
+
+        expect(firstResponse.stopReason).toBe("end_turn");
+        expect(secondResponse.stopReason).toBe("end_turn");
+      },
+    );
+  });
+
   it("keeps the turn running when the transcript cannot be written", async () => {
     const blocker = await createTmpDir("acp-persist-block");
     cleanups.push(blocker.cleanup);
@@ -1887,6 +1952,37 @@ describe("compaction", () => {
       expect(reported).toHaveLength(0);
     });
   });
+
+  it("swallows a failed compaction a client that asked for nothing hears about", async () => {
+    await withOverflowingSession(
+      100,
+      // Neither `notices` nor `compaction`: the failure has no channel to
+      // reach the client on, so the turn has to carry on regardless.
+      undefined,
+      async ({ harness, server }) => {
+        const response = await harness.prompt("the second question");
+
+        expect(response.stopReason).toBe("end_turn");
+        // The updates accumulate across turns, so the second answer is the
+        // part that proves the turn carried on after the failed summary.
+        expect(server.requests).toHaveLength(3);
+        expect(agentText(harness.updates)).toContain("second answer");
+        expect(harness.updates.filter((u) => u.sessionUpdate === "notice")).toHaveLength(0);
+        expect(harness.updates.filter((u) => u.sessionUpdate === "compaction_update")).toHaveLength(0);
+      },
+      {
+        turnFor: (_request, index) =>
+          index === 1
+            ? {}
+            : {
+                text: index === 0 ? "first answer" : "second answer",
+                ...(index === 0
+                  ? { usage: { prompt_tokens: 5_000, completion_tokens: 10 } }
+                  : {}),
+              },
+      },
+    );
+  });
 });
 
 describe("slash commands", () => {
@@ -2173,6 +2269,48 @@ describe("shutdown", () => {
             (message) => message.role === "user" && JSON.stringify(message.content).includes("long turn"),
           ),
         ).toBe(true);
+      },
+    );
+  });
+
+  it("skips the final write for a session deleted while shutting down", async () => {
+    const state = await createTmpDir("acp-shutdown-del");
+    cleanups.push(state.cleanup);
+
+    // Holds the turn at the permission gate: nothing aborts that wait, so
+    // `session.abort` stays set and shutdown parks in its settle loop.
+    let release: (answer: string) => void = () => undefined;
+    const gate = new Promise<string>((resolve) => {
+      release = resolve;
+    });
+
+    await withAgent(
+      [
+        {
+          toolCalls: [
+            { name: "write_file", arguments: JSON.stringify({ path: "late.txt", content: "x" }) },
+          ],
+        },
+        { text: "unused" },
+      ],
+      { sessionsDir: state.path },
+      async ({ harness, agent }) => {
+        harness.answerPermission = () => gate;
+
+        const parked = harness.prompt("write late.txt");
+        await harness.waitFor(() => harness.permissionRequests.length === 1);
+
+        const shutting = agent.shutdown();
+        // Deleting during the settle wait is what the final check must notice:
+        // persisting now would recreate the record the delete just dropped.
+        await harness.prompt("/delete");
+        await shutting;
+
+        expect(await readdir(state.path)).toHaveLength(0);
+
+        release("allow-once");
+        const response = await parked;
+        expect(response.stopReason).toBe("cancelled");
       },
     );
   });
