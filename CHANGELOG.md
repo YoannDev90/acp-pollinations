@@ -44,6 +44,15 @@ first time in 1.0.0.
   `package.json`, `AGENT_VERSION`, and the changelog section agree, then runs
   the checks and publishes with npm provenance.
 
+### Fixed
+
+- The local `bash` tool no longer waits on a process the command left
+  behind. The command now runs in its own process group — dash, the
+  `/bin/sh` of Debian, Ubuntu, and the CI runners, forks its last command
+  instead of exec'ing it — so a session abort kills the shell and the work
+  together, and a backgrounded descendant holding the output pipes cannot
+  pin the tool call open until it exits alone.
+
 ### Security
 
 - Base URL normalisation no longer uses the trailing-slash regex

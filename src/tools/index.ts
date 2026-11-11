@@ -753,6 +753,11 @@ function runLocally(command: string, ctx: ToolContext): Promise<CommandResult> {
       cwd: ctx.cwd,
       env,
       stdio: ["ignore", "pipe", "pipe"],
+      // Its own process group, because the shell is only a wrapper: dash —
+      // the `/bin/sh` of Debian and Ubuntu, and so of the CI runners — forks
+      // the last command instead of exec'ing it, so a signal aimed at the
+      // shell would leave the real work running behind a dead wrapper.
+      detached: true,
     });
 
     let output = "";
@@ -763,13 +768,35 @@ function runLocally(command: string, ctx: ToolContext): Promise<CommandResult> {
     child.stdout.on("data", collect);
     child.stderr.on("data", collect);
 
+    const killTree = (): void => {
+      // `pid` stays undefined only when the spawn itself failed, which the
+      // `error` handler below settles before anything else can signal —
+      // unless a session abort lands in that same tick.
+      /* v8 ignore next */
+      if (child.pid === undefined) return;
+      try {
+        // A negative pid signals the whole group the child leads, shell and
+        // command alike.
+        process.kill(-child.pid, "SIGKILL");
+      } catch {
+        // The group is already gone: nothing left to signal.
+      }
+    };
+
     /* v8 ignore start -- the same 120s ceiling: this kill runs only if a
        command outlives it, and no test waits that long */
-    const timer = setTimeout(() => child.kill("SIGKILL"), BASH_TIMEOUT_MS);
+    const timer = setTimeout(killTree, BASH_TIMEOUT_MS);
     /* v8 ignore stop */
-    const onAbort = () => child.kill("SIGKILL");
+    const onAbort = () => killTree();
     ctx.signal.addEventListener("abort", onAbort, { once: true });
 
+    child.on("exit", () => {
+      // The shell is gone, but a backgrounded descendant still holds the
+      // output pipes, and `close` — which is what settles this promise —
+      // waits for every stream to end. Reaping the group here is what stops
+      // such a process from pinning the tool call until it exits alone.
+      killTree();
+    });
     child.on("close", (code) => {
       clearTimeout(timer);
       ctx.signal.removeEventListener("abort", onAbort);

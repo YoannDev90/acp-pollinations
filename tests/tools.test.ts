@@ -719,6 +719,18 @@ describe("executeTool", () => {
       expect(result.output).toMatch(/exit code/);
     });
 
+    it("does not wait for a process the command left behind", async () => {
+      const { context } = await makeWorkspace();
+
+      // The background job inherits the output pipes, so `close` cannot fire
+      // while it lives: without the group reap on exit the call would sit
+      // here for the full thirty seconds.
+      const result = await executeTool("bash", { command: "sleep 30 & echo started" }, context);
+
+      expectSuccess(result);
+      expect(result.output).toContain("started");
+    });
+
     it("reports a shell that never started", async () => {
       const { path, context } = await makeWorkspace();
       // Point the run at a working directory that is not there.
