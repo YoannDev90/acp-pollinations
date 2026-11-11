@@ -494,6 +494,92 @@ describe("createPollinationsAgent", () => {
     });
   });
 
+  it("invents a call id and empty arguments when the model omits both", async () => {
+    await withAgent(
+      [
+        {
+          // A delta stream with no `id` and no argument frames: the agent has
+          // to supply both before the call can be paired with a result.
+          rawFrames: [
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"read_file"}}]}}]}\n\n',
+          ],
+        },
+        { text: "recovered" },
+      ],
+      {},
+      async ({ harness }) => {
+        const response = await harness.prompt("call without id");
+
+        expect(response.stopReason).toBe("end_turn");
+        const call = harness.updates.find(
+          (u) => (u as { sessionUpdate?: string }).sessionUpdate === "tool_call",
+        ) as { toolCallId?: string; title?: string; rawInput?: unknown } | undefined;
+        // The generated id is what later updates pair the result with...
+        expect(call?.toolCallId).toMatch(/^call_0_[0-9a-f]{6}$/);
+        // ...and the missing arguments were read as an empty object, which the
+        // title — built from the parsed input — proves.
+        expect(call?.rawInput).toEqual({});
+        expect(call?.title).toBe("Read <path>");
+        expect(agentText(harness.updates)).toBe("recovered");
+      },
+    );
+  });
+
+  it("labels a call to a tool it does not know", async () => {
+    await withAgent(
+      [{ toolCalls: [{ name: "warp_drive", arguments: "{}" }] }, { text: "recovered" }],
+      {},
+      async ({ harness }) => {
+        const response = await harness.prompt("engage");
+
+        expect(response.stopReason).toBe("end_turn");
+        const call = harness.updates.find(
+          (u) => (u as { sessionUpdate?: string }).sessionUpdate === "tool_call",
+        ) as { kind?: string; title?: string } | undefined;
+        // Neither a shipped definition nor an MCP binding knows this name, so
+        // the kind falls back to "other" and the title to the model's own name.
+        expect(call?.kind).toBe("other");
+        expect(call?.title).toBe("warp_drive");
+
+        const failed = harness.updates.find(
+          (u) =>
+            (u as { sessionUpdate?: string }).sessionUpdate === "tool_call_update" &&
+            (u as { status?: string }).status === "failed",
+        ) as { rawOutput?: string } | undefined;
+        expect(failed?.rawOutput).toContain("Unknown tool: warp_drive");
+        expect(agentText(harness.updates)).toBe("recovered");
+      },
+    );
+  });
+
+  it("cancels a turn whose abort lands inside the last tool call", async () => {
+    await withAgent(
+      [
+        {
+          toolCalls: [
+            { name: "write_file", arguments: JSON.stringify({ path: "late.txt", content: "x" }) },
+          ],
+        },
+        { text: "unused" },
+      ],
+      {},
+      async ({ cwd, harness }) => {
+        harness.answerPermission = async () => {
+          // The permission gate runs after the pre-execution abort check, so
+          // cancelling here is what lets the loop-end check observe the abort.
+          await harness.ctx.notify("session/cancel", { sessionId: harness.session.sessionId });
+          return "allow-once";
+        };
+
+        const response = await harness.prompt("write late.txt");
+
+        expect(response.stopReason).toBe("cancelled");
+        // Nothing after the check aborts the tool itself: it still ran.
+        expect(await readFile(join(cwd, "late.txt"), "utf8")).toBe("x");
+      },
+    );
+  });
+
   it("stops at maxTurnRequests when the model keeps calling tools", async () => {
     const looping = Array.from({ length: 5 }, () => ({
       toolCalls: [{ name: "read_file", arguments: JSON.stringify({ path: "a.txt" }) }],

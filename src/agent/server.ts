@@ -1324,7 +1324,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
               title,
               name,
               kind,
-              input: (rawInput ?? {}) as Record<string, unknown>,
+              input: rawInput,
             }),
         };
         result = await executeTool(call.function.name, input, toolContext);

@@ -82,7 +82,8 @@ export type ToolContext = {
     name: string;
     kind: ToolKind;
     title: string;
-    rawInput: unknown;
+    /** The parsed tool input, echoed back in the permission question. */
+    rawInput: Record<string, unknown>;
   }) => Promise<boolean>;
 };
 
