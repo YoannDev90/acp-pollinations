@@ -8,6 +8,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 
 import type { AgentConfig } from "../src/config.js";
 import { PollinationsLlm } from "../src/llm.js";
+import { SESSION_RECORD_VERSION } from "../src/sessions/index.js";
 import { createPollinationsAgent, promptToText } from "../src/agent/server.js";
 import type { PollinationsAgentApp } from "../src/agent/server.js";
 import { withInProcessClient } from "./helpers/acp-client.js";
@@ -1374,6 +1375,89 @@ describe("session restore (load and resume)", () => {
       await expect(
         harness.ctx.request("session/close", { sessionId: "sess_never_existed" }),
       ).resolves.toEqual({});
+    });
+  });
+
+  it("fills in the defaults a record written before them lacks", async () => {
+    const state = await createTmpDir("acp-legacy-load");
+    cleanups.push(state.cleanup);
+
+    await withAgent([{ text: "after the reload" }], { sessionsDir: state.path }, async ({ harness }) => {
+      const { sessionId } = harness.session;
+
+      // The live session shadows its own file: forget it first, the way a
+      // restart would, so the load has to read the record back from disk.
+      await harness.ctx.request("session/close", { sessionId });
+
+      // A record from an older agent: no reasoning level, no mode, and a user
+      // message stored with null content.
+      await writeFile(
+        join(state.path, `${sessionId}.json`),
+        JSON.stringify({
+          version: SESSION_RECORD_VERSION,
+          id: sessionId,
+          cwd: harness.cwd,
+          roots: [harness.cwd],
+          model: "test-model",
+          history: [{ role: "user", content: null }],
+        }),
+        "utf8",
+      );
+
+      const response = await harness.ctx.request("session/load", {
+        sessionId,
+        cwd: harness.cwd,
+        mcpServers: [],
+      });
+
+      // The missing fields fall back to the shipped defaults...
+      expect(response.modes?.currentModeId).toBe("build");
+      expect(
+        (response.configOptions ?? []).find((option) => option.id === "reasoning")?.currentValue,
+      ).toBe("medium");
+
+      // ...and the null-content user message is replayed to the client as
+      // empty text rather than crashing the load.
+      await harness.prompt("hello");
+      const replayedEmpty = harness.updates.some(
+        (update) =>
+          (update as { sessionUpdate?: string }).sessionUpdate === "user_message_chunk" &&
+          (update as { content?: { text?: string } }).content?.text === "",
+      );
+      expect(replayedEmpty).toBe(true);
+      expect(agentText(harness.updates)).toContain("after the reload");
+    });
+  });
+
+  it("fills in the defaults when resuming a record written before them", async () => {
+    const state = await createTmpDir("acp-legacy-resume");
+    cleanups.push(state.cleanup);
+
+    await withAgent([{ text: "unused" }], { sessionsDir: state.path }, async ({ harness }) => {
+      await writeFile(
+        join(state.path, "sess_legacy.json"),
+        JSON.stringify({
+          version: SESSION_RECORD_VERSION,
+          id: "sess_legacy",
+          cwd: harness.cwd,
+          roots: [harness.cwd],
+          model: "test-model",
+          history: [{ role: "user", content: "hi" }],
+        }),
+        "utf8",
+      );
+
+      // No `mcpServers`: a client with nothing to reconnect passes nothing,
+      // and resume has to treat the absence as an empty list.
+      const response = await harness.ctx.request("session/resume", {
+        sessionId: "sess_legacy",
+        cwd: harness.cwd,
+      });
+
+      expect(response.modes?.currentModeId).toBe("build");
+      expect(
+        (response.configOptions ?? []).find((option) => option.id === "reasoning")?.currentValue,
+      ).toBe("medium");
     });
   });
 });
