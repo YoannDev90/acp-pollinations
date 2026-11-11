@@ -176,6 +176,34 @@ describe("createPollinationsAgent", () => {
     });
   });
 
+  it("builds its own LLM client from the config when none is passed", async () => {
+    const server = await startFakeLlmServer([{ text: "from the config client" }]);
+    servers.push(server);
+
+    const workspace = await createTmpDir("acp-config-llm");
+    cleanups.push(workspace.cleanup);
+
+    // No `llm` option: the agent has to construct one from `config`, or the
+    // turn below would have no client to call the endpoint with.
+    const agent = createPollinationsAgent({
+      config: {
+        apiKey: "sk_test",
+        baseUrl: server.baseUrl,
+        model: "test-model",
+        maxTurnRequests: 8,
+        permissionMode: "ask",
+        compactionThresholdTokens: 0,
+      },
+    });
+
+    await withInProcessClient(agent, { cwd: workspace.path }, async (harness) => {
+      const response = await harness.prompt("say hello");
+
+      expect(response.stopReason).toBe("end_turn");
+      expect(agentText(harness.updates)).toBe("from the config client");
+    });
+  });
+
   it("streams the model's reasoning as thought chunks", async () => {
     await withAgent([{ reasoning: "let me think", text: "the answer" }], {}, async ({ harness }) => {
       const response = await harness.prompt("think hard");
@@ -1338,6 +1366,16 @@ describe("session restore (load and resume)", () => {
       expect((loaded.configOptions ?? [])[0]?.currentValue).toBe("test-model");
     });
   });
+
+  it("closes a session it has never seen", async () => {
+    await withAgent([{ text: "unused" }], {}, async ({ harness }) => {
+      // Idempotent like delete: a client may close a session this process
+      // already forgot, and there are no connections to tear down then.
+      await expect(
+        harness.ctx.request("session/close", { sessionId: "sess_never_existed" }),
+      ).resolves.toEqual({});
+    });
+  });
 });
 
 describe("session listing and deletion", () => {
@@ -1775,6 +1813,37 @@ describe("slash commands", () => {
       // Only this session exists, and it is listed by id.
       expect(agentText(harness.updates)).toContain(harness.session.sessionId);
 
+      expect(server.requests).toHaveLength(0);
+    });
+  });
+
+  it("names the MCP tools a session connected to", async () => {
+    await withAgent(
+      [{ text: "unused" }],
+      {},
+      async ({ harness, server }) => {
+        await harness.prompt("/tools");
+        const tools = agentText(harness.updates);
+
+        // The session connected to the fake MCP server, so its tools are
+        // listed by name instead of the empty-state "(none)".
+        expect(tools).toContain("Built-in tools:");
+        expect(tools).toContain("echo");
+        expect(tools).not.toContain("(none)");
+
+        expect(server.requests).toHaveLength(0);
+      },
+      { client: { mcpServers: FAKE_MCP_SERVER } },
+    );
+  });
+
+  it("says there are no persisted sessions when none are stored", async () => {
+    // No sessionsDir: the in-memory store holds nothing, so the listing has
+    // to fall back to its empty-state text instead of a blank line.
+    await withAgent([{ text: "unused" }], {}, async ({ harness, server }) => {
+      await harness.prompt("/sessions");
+
+      expect(agentText(harness.updates)).toContain("No persisted sessions.");
       expect(server.requests).toHaveLength(0);
     });
   });
