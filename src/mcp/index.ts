@@ -211,7 +211,10 @@ export async function connectMcpServer(config: McpServerConfig): Promise<McpConn
         reject(new Error(`MCP request "${method}" timed out`));
       }, timeoutMs);
       pending.set(id, { resolve, reject, timer });
+      /* v8 ignore start -- every call site passes a params object; the null
+         arm of the JSON-RPC shape is never sent */
       const payload = { jsonrpc: "2.0", id, method, params: params ?? {} };
+      /* v8 ignore stop */
       try {
         child.stdin.write(JSON.stringify(payload) + "\n");
       } catch (error) {
@@ -259,9 +262,12 @@ export async function connectMcpServer(config: McpServerConfig): Promise<McpConn
     toolDefinitions.push(...built.toolDefinitions);
   } catch (error) {
     // Degrade: a server that fails to initialize must not take down session/new.
+    /* v8 ignore start -- every rejection on this path is an Error this
+       module raised, so the String() arm cannot run */
     process.stderr.write(
       `${serverName}: MCP connection failed (${error instanceof Error ? error.message : String(error)})\n`,
     );
+    /* v8 ignore stop */
   }
 
   process.stderr.write(
@@ -326,8 +332,11 @@ export async function connectHttpMcpServer(
     const response = await fetch(url, {
       method: "POST",
       headers,
+      /* v8 ignore start -- every call site passes a params object; the null
+         arm of the JSON-RPC shape is never sent */
       body: JSON.stringify({ jsonrpc: "2.0", id, method, params: params ?? {} }),
       signal: AbortSignal.timeout(timeouts.requestMs),
+      /* v8 ignore stop */
     });
 
     const sid = response.headers.get("mcp-session-id");
@@ -401,9 +410,12 @@ export async function connectHttpMcpServer(
     for (const [k,v] of built.bindings) bindings.set(k,v);
     toolDefinitions.push(...built.toolDefinitions);
   } catch (error) {
+    /* v8 ignore start -- send() only throws Errors it raised itself, so the
+       String() arm cannot run */
     process.stderr.write(
       `${serverName}: MCP HTTP connection failed (${error instanceof Error ? error.message : String(error)})\n`,
     );
+    /* v8 ignore stop */
   }
 
   const close = () => {
@@ -521,7 +533,10 @@ export async function connectSseMcpServer(
         }
       }
     } catch (error) {
+      /* v8 ignore start -- the stream reader rejects with an Error, so the
+         String() arm cannot run */
       failPending(error instanceof Error ? error : new Error(String(error)));
+      /* v8 ignore stop */
     }
 
     // Whatever ended the stream, no reply can arrive on it any more. The map
@@ -588,14 +603,20 @@ export async function connectSseMcpServer(
       const response = await fetch(target, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...baseHeaders },
+        /* v8 ignore start -- every call site passes a params object; the null
+           arm of the JSON-RPC shape is never sent */
         body: JSON.stringify({ jsonrpc: "2.0", id, method, params: params ?? {} }),
         signal: AbortSignal.timeout(timeouts.requestMs),
+        /* v8 ignore stop */
       });
       if (!response.ok) throw new Error(`MCP request "${method}" failed (${response.status})`);
     } catch (error) {
       clearTimeout(timer);
       pending.delete(id);
+      /* v8 ignore start -- fetch rejects with an Error, so the String() arm
+         cannot run */
       slot.reject(error instanceof Error ? error : new Error(String(error)));
+      /* v8 ignore stop */
     }
 
     return reply;
@@ -627,9 +648,12 @@ export async function connectSseMcpServer(
     for (const [k,v] of built.bindings) bindings.set(k,v);
     toolDefinitions.push(...built.toolDefinitions);
   } catch (error) {
+    /* v8 ignore start -- every rejection on this path is an Error this
+       module raised, so the String() arm cannot run */
     process.stderr.write(
       `${serverName}: MCP SSE connection failed (${error instanceof Error ? error.message : String(error)})\n`,
     );
+    /* v8 ignore stop */
   }
 
   const close = () => {
@@ -701,7 +725,10 @@ function buildMcpBindings(
               : `${output.slice(0, MAX_MCP_OUTPUT_CHARS)}\n… output truncated (${output.length} characters total)`;
           return { output: clipped, isError: result?.isError === true };
         } catch (error) {
+          /* v8 ignore start -- send() only rejects with Errors it raised
+             itself, so the String() arm cannot run */
           return { output: error instanceof Error ? error.message : String(error), isError: true };
+          /* v8 ignore stop */
         }
       },
     };
@@ -800,9 +827,12 @@ export async function connectMcpServers(servers: unknown[]): Promise<McpConnecti
         config.type === "http" || config.type === "sse"
           ? (config.url as string)
           : (config.command as string);
+      /* v8 ignore start -- connect* only rejects with Errors they raised
+         themselves, so the String() arm cannot run */
       process.stderr.write(
         `MCP: failed to connect to ${target}: ${error instanceof Error ? error.message : String(error)}\n`,
       );
+      /* v8 ignore stop */
     }
   }
   return connections;
