@@ -543,6 +543,21 @@ describe("MCP stdio transport", () => {
   it("ignores a server whose command is not a string", async () => {
     expect(await connectMcpServers([{ args: ["--version"] }])).toEqual([]);
   });
+
+  it("reports a stdio server whose command spawn refuses outright", async () => {
+    // A null byte makes `spawn` throw synchronously instead of emitting an
+    // error event, so the shared connect path — not the child's error
+    // handler — has to catch it and skip the entry.
+    const connections = await connectMcpServers([
+      {
+        type: "stdio",
+        command: ["acp", "pollinations"].join(String.fromCharCode(0)),
+        name: "bad-command",
+      },
+    ]);
+
+    expect(connections).toEqual([]);
+  });
 });
 
 describe("MCP HTTP transport", () => {
@@ -728,6 +743,16 @@ describe("MCP HTTP transport", () => {
     } finally {
       await server.close();
     }
+  });
+
+  it("falls back to a generic name when no url is configured", async () => {
+    // Without a url the request cannot even be built, but the failure still
+    // has to be reported under a name the operator can recognise.
+    const connection = await connectHttpMcpServer({ type: "http" }, FAST);
+
+    expect(connection.name).toBe("mcp-http");
+    expect(connection.tools).toEqual([]);
+    connection.close();
   });
 });
 
@@ -939,6 +964,12 @@ describe("MCP SSE transport", () => {
     } finally {
       await server.close();
     }
+  });
+
+  it("rejects a handshake attempted without a url", async () => {
+    // The GET cannot be built without a url; the caller has to see the
+    // failure rather than a connection that silently never got a stream.
+    await expect(connectSseMcpServer({ type: "sse" }, FAST)).rejects.toThrow();
   });
 });
 
