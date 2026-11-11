@@ -565,6 +565,10 @@ export async function connectSseMcpServer(
       slot.resolve = resolve;
       slot.reject = reject;
     });
+    // `close()` can settle this while the POST is still in flight, before the
+    // function returns and adopts it. A rejection with no handler attached is
+    // reported as unhandled and, in production, would take the process down.
+    void reply.catch(() => undefined);
     const timer = setTimeout(() => {
       pending.delete(id);
       slot.reject(new Error(`MCP request "${method}" timed out`));
