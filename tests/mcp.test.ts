@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   connectHttpMcpServer,
+  connectMcpServer,
   connectMcpServers,
   connectSseMcpServer,
   isHttpMcpServer,
@@ -14,7 +15,13 @@ import {
   mergeMcpBindings,
   normalizeMcpServer,
 } from "../src/mcp/index.js";
-import type { McpConnection, McpTimeouts, McpTool, McpToolBinding } from "../src/mcp/index.js";
+import type {
+  McpConnection,
+  McpServerConfig,
+  McpTimeouts,
+  McpTool,
+  McpToolBinding,
+} from "../src/mcp/index.js";
 import type { LlmToolDefinition } from "../src/llm.js";
 
 const helpers = join(dirname(fileURLToPath(import.meta.url)), "helpers");
@@ -297,6 +304,83 @@ describe("MCP stdio transport", () => {
     connection?.close();
   });
 
+  it("renders odd result shapes and a tool with no description", async () => {
+    const [connection] = await connectStdio("odd-results");
+
+    expect(connection?.tools.map((tool) => tool.name)).toEqual([
+      "mixed",
+      "primitive",
+      "bare",
+      "silent-throw",
+    ]);
+
+    // A text entry without text contributes nothing, and an entry of another
+    // type is rendered as JSON: the array has to render either way.
+    expect((await connection?.bindings.get("mixed")?.call({}))?.output).toBe(
+      `\n${JSON.stringify({ type: "image", data: "abc" })}`,
+    );
+    // A result that carries no content at all still answers the model.
+    expect((await connection?.bindings.get("primitive")?.call({}))?.output).toBe("(no output)");
+
+    // A tool without a description is described from its name rather than
+    // shipping an empty one to the model.
+    expect(
+      connection?.toolDefinitions.find((definition) => definition.function.name === "bare")
+        ?.function.description,
+    ).toBe("MCP tool bare from fake");
+
+    // An error carrying no message must not reject with `undefined`.
+    expect(await connection?.bindings.get("silent-throw")?.call({})).toEqual({
+      output: "MCP request failed",
+      isError: true,
+    });
+
+    connection?.close();
+  });
+
+  it("stops the walk when tools/list answers without a tools array", async () => {
+    const [connection] = await connectStdio("odd-list");
+
+    // The payload parses but carries no list: the walk has to end with no
+    // tools instead of spreading something that is not an array.
+    expect(connection?.tools).toEqual([]);
+    expect(connection?.bindings.size).toBe(0);
+    connection?.close();
+  });
+
+  it("defaults the name and arguments of a bare config entry", async () => {
+    // `env` with no operands prints the environment and exits at once, so
+    // the child starts with the defaulted empty argument list and the
+    // handshake fails by exit instead of hanging on a script that never runs.
+    const connection = await connectMcpServer({ type: "stdio", command: "/usr/bin/env" });
+
+    expect(connection.name).toBe("/usr/bin/env");
+    expect(connection.tools).toEqual([]);
+    connection.close();
+  });
+
+  it("skips malformed entries in a configured env array", async () => {
+    const [connection] = await connectMcpServers([
+      {
+        type: "stdio",
+        command: process.execPath,
+        args: [fakeServer, "env-gated"],
+        name: "fake",
+        // Client JSON may carry nulls and valueless entries: only the named
+        // variable has to reach the child for the server to stay up.
+        env: [
+          null,
+          { value: "orphan" },
+          { name: "ACP_FAKE_ENV", value: undefined },
+          { name: "ACP_FAKE_ENV", value: "on" },
+        ] as unknown as McpServerConfig["env"],
+      },
+    ]);
+
+    expect(connection?.tools.length).toBeGreaterThan(0);
+    connection?.close();
+  });
+
   it("gives up on a call the server never answers", async () => {
     const [connection] = await connectStdio("silent-call");
     // Only the request deadline is moved: faking every timer would also
@@ -482,7 +566,18 @@ describe("MCP HTTP transport", () => {
     const server = await startHttpServer();
     try {
       const asArray = await connectHttpMcpServer(
-        { type: "http", url: server.url, headers: [{ name: "x-probe", value: "array-form" }] },
+        {
+          type: "http",
+          url: server.url,
+          // The array form may also carry entries with no name or no value;
+          // they are dropped on the way out, never forwarded as headers.
+          headers: [
+            { name: "x-probe", value: "array-form" },
+            { value: "orphan" },
+            { name: "x-blank" },
+            null,
+          ] as unknown as McpServerConfig["headers"],
+        },
         FAST,
       );
       asArray.close();
@@ -496,6 +591,21 @@ describe("MCP HTTP transport", () => {
       // Editors spell headers both ways; the wire must not care which.
       expect(server.requests[0]?.probe).toBe("array-form");
       expect(server.requests.some((request) => request.probe === "object-form")).toBe(true);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("routes an http entry through the shared connect path", async () => {
+    const server = await startHttpServer();
+    try {
+      // `connectMcpServers` picks the transport from the normalized type:
+      // an http entry must reach the HTTP client, not the stdio spawn.
+      const connections = await connectMcpServers([{ type: "http", url: server.url }]);
+
+      expect(connections).toHaveLength(1);
+      expect(connections[0]?.tools.map((tool) => tool.name)).toEqual(["echo"]);
+      connections[0]?.close();
     } finally {
       await server.close();
     }
@@ -695,6 +805,9 @@ describe("normalizeMcpServer", () => {
       headers: undefined,
     });
     expect(normalizeMcpServer({ url: "http://localhost:1" })).toMatchObject({ type: "http" });
+    // A non-array `args` would be spread into `spawn` as a non-list; it is
+    // normalized to an empty list instead.
+    expect(normalizeMcpServer({ command: "node", args: "oops" })?.args).toEqual([]);
     expect(normalizeMcpServer({ type: "http" })).toBeNull();
     expect(normalizeMcpServer("node")).toBeNull();
   });
@@ -752,5 +865,42 @@ describe("mergeMcpBindings", () => {
   it("sanitises server names that are not identifier-safe", () => {
     const merged = mergeMcpBindings([connectionWith("my-server.v2", [{ name: "read_file" }])]);
     expect([...merged.bindings.keys()]).toEqual(["my_server_v2__read_file"]);
+  });
+
+  it("merges a binding whose definition never arrived", async () => {
+    // A connection can expose a binding without a matching definition; the
+    // merge still ships it, with a fallback description and empty params,
+    // because a tool the model cannot call is worse than an ugly one.
+    const orphan: McpConnection = {
+      name: "orphan-server",
+      tools: [],
+      bindings: new Map([
+        [
+          "lookup",
+          {
+            name: "lookup",
+            kind: "other",
+            mutating: true,
+            title: () => "orphan-server: lookup",
+            call: async () => ({ output: "found" }),
+          },
+        ],
+      ]),
+      toolDefinitions: [],
+      close: () => undefined,
+    };
+
+    const merged = mergeMcpBindings([orphan]);
+    expect(merged.definitions).toEqual([
+      {
+        type: "function",
+        function: {
+          name: "lookup",
+          description: "MCP tool lookup",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+    ]);
+    expect(await merged.bindings.get("lookup")?.call({})).toEqual({ output: "found" });
   });
 });

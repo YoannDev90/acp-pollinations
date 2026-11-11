@@ -9,14 +9,20 @@
  *   (none)     normal server: paginated `tools/list`, working `tools/call`
  *   exit-early dies before answering anything, to exercise the failure path
  *   garbage    answers `initialize`, but first writes lines that are not
- *              messages: blank, unparseable, and parsed-but-not-an-object
- *   error-reply refuses `initialize` with a JSON-RPC error
+ *              messages: blank, unparseable, parsed-but-not-an-object, and
+ *              a valid message aimed at nobody
+ *   error-reply logs to stderr, then refuses `initialize` with a JSON-RPC
+ *              error
  *   env-gated  exits unless `ACP_FAKE_ENV` reached the child, so a test can
  *              prove the configured environment was merged in
  *   odd-tools  advertises entries that are not tools and answers calls with
  *              a bare object, a bare string, and a JSON-RPC error
  *   silent-call answers `initialize` and `tools/list`, then never answers a
  *              `tools/call`, so a test can watch the request deadline fire
+ *   odd-results ships a tool with no description and answers calls with a
+ *              content array of odd entries, a bare number, and a JSON-RPC
+ *              error that carries no message
+ *   odd-list   answers `tools/list` with a payload that has no tools array
  */
 import { createInterface } from "node:readline";
 
@@ -71,6 +77,9 @@ rl.on("line", (line) => {
 
   if (method === "initialize") {
     if (mode === "error-reply") {
+      // A refusal like this would be logged by a real server; the client must
+      // forward non-empty stderr lines instead of swallowing them.
+      process.stderr.write("refusing initialize on purpose\n");
       process.stdout.write(
         `${JSON.stringify({ jsonrpc: "2.0", id, error: { message: "initialize refused" } })}\n`,
       );
@@ -78,9 +87,15 @@ rl.on("line", (line) => {
     }
     if (mode === "garbage") {
       // Noise on the wire has to be looked past, not fatal: a blank line, a
-      // line that is not JSON, and JSON that is not a message at all.
-      process.stdout.write("\nnot json at all\n\"just a string\"\nnull\n42\n");
-      process.stderr.write("garbage mode reporting for duty\n");
+      // line that is not JSON, JSON that is not a message at all, and a valid
+      // message aimed at nobody.
+      process.stdout.write(
+        '\nnot json at all\n"just a string"\nnull\n42\n{"jsonrpc":"2.0","method":"notifications/progress"}\n',
+      );
+      // Whitespace only: the client trims each stderr chunk and must not log
+      // an empty line for it. It is the sole stderr write so it arrives as
+      // its own chunk.
+      process.stderr.write("   \n\t\n");
     }
     reply(id, {
       protocolVersion: "2025-06-18",
@@ -91,6 +106,27 @@ rl.on("line", (line) => {
   }
 
   if (method === "tools/list") {
+    if (mode === "odd-list") {
+      // A payload with no tools array at all: the walk has to stop instead
+      // of spreading something that is not a list.
+      reply(id, { pageCount: 1 });
+      return;
+    }
+    if (mode === "odd-results") {
+      reply(id, {
+        tools: [
+          { name: "mixed", description: "Content array with odd entries", inputSchema: { type: "object" } },
+          { name: "primitive", description: "Replies with a bare number", inputSchema: { type: "object" } },
+          { name: "bare", inputSchema: { type: "object" } },
+          {
+            name: "silent-throw",
+            description: "Answers with an error that carries no message",
+            inputSchema: { type: "object" },
+          },
+        ],
+      });
+      return;
+    }
     if (mode === "odd-tools") {
       reply(id, {
         tools: [
@@ -120,6 +156,25 @@ rl.on("line", (line) => {
     // exists for: nothing else will ever settle this request.
     if (mode === "silent-call") return;
     const name = params?.name;
+    if (mode === "odd-results") {
+      if (name === "mixed") {
+        // One entry with no `text`, and one that is not text at all.
+        reply(id, { content: [{ type: "text" }, { type: "image", data: "abc" }] });
+        return;
+      }
+      if (name === "primitive") {
+        reply(id, 42);
+        return;
+      }
+      if (name === "silent-throw") {
+        process.stdout.write(
+          `${JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32000 } })}\n`,
+        );
+        return;
+      }
+      reply(id, { content: [{ type: "text", text: "no description was supplied" }] });
+      return;
+    }
     if (mode === "odd-tools") {
       if (name === "object-result") {
         reply(id, { ok: true, count: 3 });
