@@ -1492,6 +1492,45 @@ describe("session listing and deletion", () => {
     });
   });
 
+  it("pages through a cwd-filtered listing with a cursor", async () => {
+    const state = await createTmpDir("acp-list-page");
+    cleanups.push(state.cleanup);
+
+    await withAgent([{ text: "ok" }], { sessionsDir: state.path }, async ({ harness }) => {
+      // 51 stored records plus the live session's own: two pages at the
+      // 50-entry page size, so a next page actually exists to ask for.
+      for (let i = 0; i < 51; i++) {
+        const id = `sess_page${String(i).padStart(3, "0")}`;
+        await writeFile(
+          join(state.path, `${id}.json`),
+          JSON.stringify({
+            version: SESSION_RECORD_VERSION,
+            id,
+            cwd: harness.cwd,
+            roots: [harness.cwd],
+            model: "test-model",
+            history: [{ role: "user", content: "hi" }],
+          }),
+          "utf8",
+        );
+      }
+
+      const first = await harness.ctx.request("session/list", { cwd: harness.cwd });
+      expect(first.sessions).toHaveLength(50);
+      expect(first.nextCursor).toBeTruthy();
+
+      // The cursor is an offset into the filtered list: the second page holds
+      // the remainder, not the whole store.
+      const second = await harness.ctx.request("session/list", {
+        cwd: harness.cwd,
+        cursor: first.nextCursor ?? "",
+      });
+      expect(second.sessions.length).toBeGreaterThan(0);
+      expect(second.sessions.length).toBeLessThan(50);
+      expect(second.nextCursor).toBeFalsy();
+    });
+  });
+
   it("forgets a deleted session from disk, listing, and loading", async () => {
     const state = await createTmpDir("acp-delete");
     cleanups.push(state.cleanup);
