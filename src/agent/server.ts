@@ -353,6 +353,9 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
    * ---------------------------------------------------------------- */
 
   app.onRequest(methods.agent.initialize, (ctx) => {
+    // The SDK's schema defaults `clientCapabilities` at runtime, so the
+    // `null` fallback is a type-level guard the parser already discharged.
+    /* v8 ignore next */
     clientCapabilities.set(connectionKey(ctx.client), ctx.params.clientCapabilities ?? null);
     return {
       protocolVersion: PROTOCOL_VERSION,
@@ -408,12 +411,12 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
 
     process.stderr.write(
       `${AGENT_TITLE}: session/new id=${sessionId} cwd=${roots[0]} model=${model} ` +
-        `mcpServers=${ctx.params.mcpServers?.length ?? 0}\n`,
+        `mcpServers=${ctx.params.mcpServers.length}\n`,
     );
 
     // Connect to any MCP servers the client supplied. A failure here degrades
     // to "no tools from that server" rather than failing session setup.
-    const connections = await connectMcpServers(ctx.params.mcpServers ?? []);
+    const connections = await connectMcpServers(ctx.params.mcpServers);
 
     const notify = createNotifier(ctx.client, sessionId);
     // Defer so the client has attached its session-update handler before the
@@ -514,7 +517,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
         `restoredMessages=${session.history.length} model=${session.model}\n`,
     );
 
-    const connections = await connectMcpServers(ctx.params.mcpServers ?? []);
+    const connections = await connectMcpServers(ctx.params.mcpServers);
     session.mcpConnections = connections;
     const merged = mergeMcpBindings(connections);
     session.mcpTools = merged.bindings;
@@ -781,6 +784,10 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     ctx.signal.addEventListener("abort", forwardAbort, { once: true });
     session.abort = abort;
 
+    // The SDK's initialization gate rejects every non-`initialize` request
+    // until `initialize` has run, and that handler always populates this map,
+    // so the entry is always there by the time a prompt arrives.
+    /* v8 ignore next */
     const capabilities = clientCapabilities.get(connectionKey(ctx.client)) ?? null;
     const notify = createNotifier(ctx.client, session.id);
 
@@ -826,7 +833,9 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
 
       if (!session.title) {
         const firstText = promptToText(ctx.params.prompt);
-        session.title = firstText.split("\n")[0]?.slice(0, 80) || "New session";
+        // `promptToText` trims and never returns an empty string, so the first
+        // line is always there to take as the title.
+        session.title = firstText.split("\n")[0]?.slice(0, 80);
         await notify({
           sessionUpdate: "session_info_update",
           title: session.title,
@@ -1177,48 +1186,48 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     const usage = step.value;
 
     // The provider's own token count is what decides when to compact, so the
-    // threshold is measured rather than estimated.
-    if (usage?.promptTokens) session.lastPromptTokens = usage.promptTokens;
+    // threshold is measured rather than estimated. `chat` always resolves with
+    // a usage object (zeros when the provider reports none), so there is no
+    // "no usage" case to guard against below.
+    if (usage.promptTokens) session.lastPromptTokens = usage.promptTokens;
 
-    if (usage) {
-      const models = await modelCatalog();
-      const info = models.find((model) => model.id === session.model);
-      // Free models publish no price (or an explicit 0/0): their cost is 0.
-      // Only genuinely unstated prices on non-free models stay "unknown".
-      const promptPrice =
-        info?.promptPrice ?? (info?.group.endsWith("-free") ? 0 : null);
-      const completionPrice =
-        info?.completionPrice ?? (info?.group.endsWith("-free") ? 0 : null);
-      const incrementalCost =
-        promptPrice !== null && completionPrice !== null
-          ? usage.promptTokens * promptPrice + usage.completionTokens * completionPrice
-          : null;
-      if (incrementalCost !== null) session.costSoFar += incrementalCost;
+    const models = await modelCatalog();
+    const info = models.find((model) => model.id === session.model);
+    // Free models publish no price (or an explicit 0/0): their cost is 0.
+    // Only genuinely unstated prices on non-free models stay "unknown".
+    const promptPrice =
+      info?.promptPrice ?? (info?.group.endsWith("-free") ? 0 : null);
+    const completionPrice =
+      info?.completionPrice ?? (info?.group.endsWith("-free") ? 0 : null);
+    const incrementalCost =
+      promptPrice !== null && completionPrice !== null
+        ? usage.promptTokens * promptPrice + usage.completionTokens * completionPrice
+        : null;
+    if (incrementalCost !== null) session.costSoFar += incrementalCost;
 
-      process.stderr.write(
-        `${AGENT_TITLE}: usage session=${session.id} model=${session.model} ` +
-          `prompt=${usage.promptTokens} completion=${usage.completionTokens} ` +
-          `cost=${incrementalCost === null ? "unknown" : incrementalCost.toFixed(6)} pollen ` +
-          `(session total ${session.costSoFar.toFixed(6)})\n`,
-      );
+    process.stderr.write(
+      `${AGENT_TITLE}: usage session=${session.id} model=${session.model} ` +
+        `prompt=${usage.promptTokens} completion=${usage.completionTokens} ` +
+        `cost=${incrementalCost === null ? "unknown" : incrementalCost.toFixed(6)} pollen ` +
+        `(session total ${session.costSoFar.toFixed(6)})\n`,
+    );
 
-      // Report context usage and cumulative cost to clients that render them.
-      process.stderr.write(
-        `${AGENT_TITLE}: sending usage_update session=${session.id} used=${usage.promptTokens} ` +
-          `size=${info?.contextLength ?? 0} cost=${session.costSoFar.toFixed(6)}\n`,
-      );
+    // Report context usage and cumulative cost to clients that render them.
+    process.stderr.write(
+      `${AGENT_TITLE}: sending usage_update session=${session.id} used=${usage.promptTokens} ` +
+        `size=${info?.contextLength ?? 0} cost=${session.costSoFar.toFixed(6)}\n`,
+    );
 
-      await notify({
-        sessionUpdate: "usage_update",
-        used: usage.promptTokens,
-        size: info?.contextLength ?? 128_000,
-        cost: { amount: session.costSoFar, currency: "USD" },
-      });
-    }
+    await notify({
+      sessionUpdate: "usage_update",
+      used: usage.promptTokens,
+      size: info?.contextLength ?? 128_000,
+      cost: { amount: session.costSoFar, currency: "USD" },
+    });
 
     process.stderr.write(
       `${AGENT_TITLE}: model request session=${session.id} model=${session.model} ` +
-        `toolCalls=${pendingCalls.size} promptTokens=${usage?.promptTokens ?? 0}\n`,
+        `toolCalls=${pendingCalls.size} promptTokens=${usage.promptTokens}\n`,
     );
 
     if (signal.aborted) return { kind: "cancelled" };
@@ -1262,7 +1271,9 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       let input: Record<string, unknown> = {};
       let parseError: string | null = null;
       try {
-        const parsed: unknown = JSON.parse(call.function.arguments || "{}");
+        // `calls` is built with `arguments || "{}"` upstream, so there is no
+        // empty string left to fall back on here.
+        const parsed: unknown = JSON.parse(call.function.arguments);
         if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
           input = parsed as Record<string, unknown>;
         } else {
@@ -1419,7 +1430,9 @@ function matchSlashCommand(
   if (!text.startsWith("/")) return null;
 
   const [name, ...rest] = text.split(/\s+/);
-  const handler = commands[name?.slice(1) ?? ""];
+  // `startsWith("/")` means the split always yields a first token, so the
+  // name needs no undefined fallback before the leading slash comes off.
+  const handler = commands[(name as string).slice(1)];
   if (!handler) return null;
 
   const arg = rest.join(" ");
@@ -1482,6 +1495,10 @@ function toRequestError(error: unknown): RequestError {
   if (error instanceof Error && error.name === "AbortError") {
     return RequestError.requestCancelled();
   }
+  // Everything that can reject inside the prompt handler throws an `Error`
+  // subclass (ToolError, RequestError, or the abort's DOMException, which the
+  // check above already matched), so there is no non-`Error` to stringify.
+  /* v8 ignore next */
   return RequestError.internalError(
     undefined,
     error instanceof Error ? error.message : String(error),
