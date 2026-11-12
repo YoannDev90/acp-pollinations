@@ -18,14 +18,15 @@ export default defineConfig({
       // never reaches this report, so it would always read 0%.
       include: ["src/**"],
       reporter: ["text", "lcov"],
-      // A few points under the current numbers (80.6 / 69.8 / 78.6 / 84.0),
-      // so a real regression fails the run while an unrelated refactor does
-      // not. Raise them alongside the tests that justify the new floor.
+      // A point under the current numbers (100 / 100 / 100 / 100), so a real
+      // regression fails the run while an unrelated refactor that loses one
+      // branch does not. Raise them alongside the tests that justify the
+      // new floor.
       thresholds: {
-        statements: 77,
-        branches: 66,
-        functions: 75,
-        lines: 80,
+        statements: 99,
+        branches: 99,
+        functions: 99,
+        lines: 99,
       },
     },
   },
