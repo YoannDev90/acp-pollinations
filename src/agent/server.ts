@@ -40,7 +40,12 @@ import {
 import type { CatalogModel } from "../models.js";
 import { createSessionStore } from "../sessions/index.js";
 import type { PersistedSession } from "../sessions/index.js";
-import { LLM_TOOLS, TOOL_DEFINITIONS, ToolError, executeTool } from "../tools/index.js";
+import {
+  LLM_TOOLS,
+  TOOL_DEFINITIONS,
+  ToolError,
+  executeTool,
+} from "../tools/index.js";
 import { promptToText, rebaseHistory, systemMessage } from "../messages.js";
 import {
   defaultSkillRoots,
@@ -56,11 +61,12 @@ import { shouldCompact, summarizeTranscript } from "../compaction.js";
 import { connectionKey, createNotifier } from "../connection.js";
 import type { SessionState } from "./session-state.js";
 import { createSessionState } from "./session-state.js";
-import type { ToolContext, ToolExecutionResult, ToolName } from "../tools/index.js";
-import {
-  connectMcpServers,
-  mergeMcpBindings,
-} from "../mcp/index.js";
+import type {
+  ToolContext,
+  ToolExecutionResult,
+  ToolName,
+} from "../tools/index.js";
+import { connectMcpServers, mergeMcpBindings } from "../mcp/index.js";
 
 /** ACP machine name for the agent, stable across releases: clients key on it. */
 export const AGENT_NAME = "pollinations";
@@ -72,7 +78,7 @@ export const AGENT_TITLE = "Pollinations";
  * Bumped together with `version` in `package.json` — see the versioning
  * policy in CONTRIBUTING.md; nothing checks the pair automatically.
  */
-export const AGENT_VERSION = "1.0.0";
+export const AGENT_VERSION = "2.0.1";
 
 export { promptToText } from "../messages.js";
 
@@ -106,15 +112,21 @@ const REASONING_TEXT: Record<(typeof REASONING_VALUES)[number], string> = {
 const REASONING_LEVELS: ReadonlyArray<{ value: string; name: string }> =
   REASONING_VALUES.map((value) => ({ value, name: REASONING_TEXT[value] }));
 
-const MODE_TEXT: Record<(typeof MODE_VALUES)[number], { name: string; description: string }> = {
+const MODE_TEXT: Record<
+  (typeof MODE_VALUES)[number],
+  { name: string; description: string }
+> = {
   build: { name: "Build", description: "Implement changes" },
   plan: { name: "Plan", description: "Plan without editing" },
   ask: { name: "Ask", description: "Answer questions" },
 };
 
 /** The modes a session can run in; see {@link REASONING_LEVELS}. */
-const AVAILABLE_MODES: ReadonlyArray<{ id: string; name: string; description: string }> =
-  MODE_VALUES.map((id) => ({ id, ...MODE_TEXT[id] }));
+const AVAILABLE_MODES: ReadonlyArray<{
+  id: string;
+  name: string;
+  description: string;
+}> = MODE_VALUES.map((id) => ({ id, ...MODE_TEXT[id] }));
 
 /** What a slash command is handed when it runs. */
 type SlashCommandContext = {
@@ -188,7 +200,9 @@ export type PollinationsAgentApp = AgentApp & { shutdown(): Promise<void> };
  * in-process in tests) and drives Pollinations chat completions with a tool
  * loop over the session workspace.
  */
-export function createPollinationsAgent(options: CreatePollinationsAgentOptions): PollinationsAgentApp {
+export function createPollinationsAgent(
+  options: CreatePollinationsAgentOptions,
+): PollinationsAgentApp {
   const { config } = options;
   // The LLM client requires a key, but `session/new` rejects before any request
   // is made when one is missing, so the agent can still answer `initialize` and
@@ -259,7 +273,10 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
    * agent started with rather than failing a session over a file.
    */
   async function sessionDefaults(): Promise<
-    Pick<AgentConfig, "model" | "defaultMode" | "defaultReasoning" | "mcpServers">
+    Pick<
+      AgentConfig,
+      "model" | "defaultMode" | "defaultReasoning" | "mcpServers"
+    >
   > {
     try {
       return await resolveSessionDefaults(config, settingsOptions());
@@ -328,15 +345,24 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       takesArg: true,
       run: ({ session }) => {
         const commands = Object.entries(SLASH_COMMANDS)
-          .map(([name, command]) => `- /${name.padEnd(10)}${command.description}`)
+          .map(
+            ([name, command]) => `- /${name.padEnd(10)}${command.description}`,
+          )
           .join("\n");
         // Skills are advertised next to the table, so they are listed next to
         // it too: what the client shows and what `/help` prints stay the same
         // set, which is the drift this section exists to prevent.
         const skills = advertisedSkills(session.skills)
-          .map((skill) => `- /${skill.name.padEnd(10)}${skillCommandDescription(skill)}`)
+          .map(
+            (skill) =>
+              `- /${skill.name.padEnd(10)}${skillCommandDescription(skill)}`,
+          )
           .join("\n");
-        return "Available commands:\n" + commands + (skills ? `\n\nSkills:\n${skills}` : "");
+        return (
+          "Available commands:\n" +
+          commands +
+          (skills ? `\n\nSkills:\n${skills}` : "")
+        );
       },
     },
     status: {
@@ -370,15 +396,22 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
         const rows = await describeSettings(settingsOptions());
 
         if (arg === "show") {
-          return [...rows, "", `Settings file: ${config.settingsFile}`].join("\n");
+          return [...rows, "", `Settings file: ${config.settingsFile}`].join(
+            "\n",
+          );
         }
 
-        const { created } = await ensureSettingsFile(config.settingsFile, config);
+        const { created } = await ensureSettingsFile(
+          config.settingsFile,
+          config,
+        );
         const opened = await openSettings(config.settingsFile);
         return [
           ...rows,
           "",
-          created ? `Created ${config.settingsFile}` : `Settings file: ${config.settingsFile}`,
+          created
+            ? `Created ${config.settingsFile}`
+            : `Settings file: ${config.settingsFile}`,
           opened.opened
             ? `Opened with ${opened.via}.`
             : "No editor could be started; edit the file by hand.",
@@ -407,7 +440,10 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
           return `Unknown mode "${arg}". Available: ${AVAILABLE_MODES.map((mode) => mode.id).join(", ")}.`;
         }
         session.mode = arg;
-        await notify({ sessionUpdate: "current_mode_update", currentModeId: arg });
+        await notify({
+          sessionUpdate: "current_mode_update",
+          currentModeId: arg,
+        });
         return `Switched mode to ${session.mode}.`;
       },
     },
@@ -423,7 +459,10 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
         const models = await modelCatalog();
         await notify({
           sessionUpdate: "config_option_update",
-          configOptions: [buildModelOption(models, session.model), buildReasoningOption(arg)],
+          configOptions: [
+            buildModelOption(models, session.model),
+            buildReasoningOption(arg),
+          ],
         });
         return `Switched reasoning level to ${session.reasoningLevel}.`;
       },
@@ -460,7 +499,8 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       description: "List installed skills",
       takesArg: true,
       run: ({ session, arg }) => {
-        if (session.skills.length === 0) return "No skills are installed for this session.";
+        if (session.skills.length === 0)
+          return "No skills are installed for this session.";
         const needle = arg.trim().toLowerCase();
         const matches = needle
           ? session.skills.filter(
@@ -489,7 +529,10 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
           signal,
         });
         if (summary) {
-          session.history = [session.history[0] as LlmMessage, { role: "assistant", content: summary }];
+          session.history = [
+            session.history[0] as LlmMessage,
+            { role: "assistant", content: summary },
+          ];
           session.lastPromptTokens = 0;
         }
         return summary ? "Compacted." : "Compaction failed.";
@@ -526,7 +569,9 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
    * model, which reaches it through `list_skills` instead.
    */
   const advertisedSkills = (skills: readonly Skill[]): Skill[] =>
-    skills.filter((skill) => !SLASH_COMMANDS[skill.name] && isSkillCommandName(skill.name));
+    skills.filter(
+      (skill) => !SLASH_COMMANDS[skill.name] && isSkillCommandName(skill.name),
+    );
 
   /** Command list advertised to the client: the table above, plus the skills. */
   function availableCommandsFor(
@@ -537,7 +582,10 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       description: command.description,
     }));
     for (const skill of advertisedSkills(skills)) {
-      commands.push({ name: skill.name, description: skillCommandDescription(skill) });
+      commands.push({
+        name: skill.name,
+        description: skillCommandDescription(skill),
+      });
     }
     return commands;
   }
@@ -582,7 +630,10 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     // The SDK's schema defaults `clientCapabilities` at runtime, so the
     // `null` fallback is a type-level guard the parser already discharged.
     /* v8 ignore next */
-    clientCapabilities.set(connectionKey(ctx.client), ctx.params.clientCapabilities ?? null);
+    clientCapabilities.set(
+      connectionKey(ctx.client),
+      ctx.params.clientCapabilities ?? null,
+    );
     return {
       protocolVersion: PROTOCOL_VERSION,
       agentCapabilities: {
@@ -591,7 +642,11 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
         mcpCapabilities: { http: true, sse: true },
         sessionCapabilities: { list: {}, delete: {}, close: {}, resume: {} },
       },
-      agentInfo: { name: AGENT_NAME, title: AGENT_TITLE, version: AGENT_VERSION },
+      agentInfo: {
+        name: AGENT_NAME,
+        title: AGENT_TITLE,
+        version: AGENT_VERSION,
+      },
     };
   });
 
@@ -601,10 +656,16 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
   app.onRequest(methods.agent.session.new, async (ctx) => {
     const { cwd } = ctx.params;
     if (typeof cwd !== "string" || cwd.length === 0) {
-      throw RequestError.invalidParams({ cwd }, "`cwd` is required and must be an absolute path");
+      throw RequestError.invalidParams(
+        { cwd },
+        "`cwd` is required and must be an absolute path",
+      );
     }
     if (!isAbsolute(cwd)) {
-      throw RequestError.invalidParams({ cwd }, "`cwd` must be an absolute path");
+      throw RequestError.invalidParams(
+        { cwd },
+        "`cwd` must be an absolute path",
+      );
     }
     if (!config.apiKey) {
       throw new RequestError(
@@ -642,7 +703,10 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
 
     // Settings-file servers first: a client that names the same server gets
     // the last word, which is what makes an override possible at all.
-    const configuredServers = [...(defaults.mcpServers ?? []), ...ctx.params.mcpServers];
+    const configuredServers = [
+      ...(defaults.mcpServers ?? []),
+      ...ctx.params.mcpServers,
+    ];
 
     process.stderr.write(
       `${AGENT_TITLE}: session/new id=${sessionId} cwd=${roots[0]} model=${model} ` +
@@ -697,7 +761,10 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
   app.onRequest(methods.agent.session.load, async (ctx) => {
     const { sessionId, cwd } = ctx.params;
     if (typeof cwd !== "string" || cwd.length === 0 || !isAbsolute(cwd)) {
-      throw RequestError.invalidParams({ cwd }, "`cwd` must be an absolute path");
+      throw RequestError.invalidParams(
+        { cwd },
+        "`cwd` must be an absolute path",
+      );
     }
     if (!config.apiKey) {
       throw new RequestError(
@@ -808,7 +875,10 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
   app.onRequest(methods.agent.session.resume, async (ctx) => {
     const { sessionId, cwd } = ctx.params;
     if (typeof cwd !== "string" || cwd.length === 0 || !isAbsolute(cwd)) {
-      throw RequestError.invalidParams({ cwd }, "`cwd` must be an absolute path");
+      throw RequestError.invalidParams(
+        { cwd },
+        "`cwd` must be an absolute path",
+      );
     }
     if (!config.apiKey) {
       throw new RequestError(
@@ -820,7 +890,10 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     const live = sessions.get(sessionId);
     if (live) {
       return {
-        modes: { currentModeId: live.mode, availableModes: [...AVAILABLE_MODES] },
+        modes: {
+          currentModeId: live.mode,
+          availableModes: [...AVAILABLE_MODES],
+        },
         configOptions: [
           buildModelOption(await modelCatalog(), live.model),
           buildReasoningOption(live.reasoningLevel),
@@ -882,7 +955,10 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     );
 
     return {
-      modes: { currentModeId: session.mode, availableModes: [...AVAILABLE_MODES] },
+      modes: {
+        currentModeId: session.mode,
+        availableModes: [...AVAILABLE_MODES],
+      },
       configOptions: [
         buildModelOption(await modelCatalog(), session.model),
         buildReasoningOption(session.reasoningLevel),
@@ -983,9 +1059,16 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     }
 
     if (configId === REASONING_CONFIG_ID) {
-      if (typeof value !== "string" || !REASONING_LEVELS.some((level) => level.value === value)) {
+      if (
+        typeof value !== "string" ||
+        !REASONING_LEVELS.some((level) => level.value === value)
+      ) {
         throw RequestError.invalidParams(
-          { configId, value, available: REASONING_LEVELS.map((level) => level.value) },
+          {
+            configId,
+            value,
+            available: REASONING_LEVELS.map((level) => level.value),
+          },
           `Unknown reasoning level "${value}".`,
         );
       }
@@ -1024,7 +1107,10 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     await persist(session);
 
     const notify = createNotifier(ctx.client, session.id);
-    await notify({ sessionUpdate: "current_mode_update", currentModeId: modeId });
+    await notify({
+      sessionUpdate: "current_mode_update",
+      currentModeId: modeId,
+    });
 
     return {};
   });
@@ -1050,7 +1136,8 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     // until `initialize` has run, and that handler always populates this map,
     // so the entry is always there by the time a prompt arrives.
     /* v8 ignore next */
-    const capabilities = clientCapabilities.get(connectionKey(ctx.client)) ?? null;
+    const capabilities =
+      clientCapabilities.get(connectionKey(ctx.client)) ?? null;
     const notify = createNotifier(ctx.client, session.id);
 
     try {
@@ -1088,12 +1175,21 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       // client keeps rendering what the user typed, the model reads the
       // expanded form. Anything that is not a skill passes through untouched.
       const skillText = await expandSkillInvocation(promptText, session.skills);
-      await replayUserPrompt(ctx.params.prompt, notify, session, skillText ?? undefined);
+      await replayUserPrompt(
+        ctx.params.prompt,
+        notify,
+        session,
+        skillText ?? undefined,
+      );
 
       await notify({
         sessionUpdate: "plan",
         entries: [
-          { content: "Handle the user request", priority: "medium", status: "in_progress" },
+          {
+            content: "Handle the user request",
+            priority: "medium",
+            status: "in_progress",
+          },
         ],
       });
 
@@ -1140,7 +1236,13 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
 
       await notify({
         sessionUpdate: "plan",
-        entries: [{ content: "Handle the user request", priority: "medium", status: "completed" }],
+        entries: [
+          {
+            content: "Handle the user request",
+            priority: "medium",
+            status: "completed",
+          },
+        ],
       });
 
       return { stopReason };
@@ -1170,7 +1272,9 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       if (abort.signal.aborted) return { stopReason: "cancelled" };
       throw toRequestError(error);
     } finally {
-      process.stderr.write(`${AGENT_TITLE}: prompt finished session=${session.id}\n`);
+      process.stderr.write(
+        `${AGENT_TITLE}: prompt finished session=${session.id}\n`,
+      );
       // Persist after every turn, including cancelled and failed ones, so a
       // restart never rewinds a thread to an earlier point.
       if (!session.deleted) await persist(session);
@@ -1241,7 +1345,11 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       messageId,
       content: { type: "text", text },
     });
-    session.history.push({ role: "assistant", content: text, reasoning_content: "" });
+    session.history.push({
+      role: "assistant",
+      content: text,
+      reasoning_content: "",
+    });
     if (!session.deleted) await persist(session);
   }
 
@@ -1322,17 +1430,22 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     const compactionId = `comp_${session.id}_${session.messageCounter}`;
 
     if (reportable) {
-      await notify({ sessionUpdate: "compaction_update", compactionId, status: "in_progress" });
+      await notify({
+        sessionUpdate: "compaction_update",
+        compactionId,
+        status: "in_progress",
+      });
     }
 
     try {
       const summary = await summarizeTranscript({
-  history: session.history,
-  model: session.model,
-  llm: llm as import("../llm.js").PollinationsLlm,
-  signal,
-});
-      if (signal.aborted || !summary) throw new Error("compaction produced no summary");
+        history: session.history,
+        model: session.model,
+        llm: llm as import("../llm.js").PollinationsLlm,
+        signal,
+      });
+      if (signal.aborted || !summary)
+        throw new Error("compaction produced no summary");
 
       session.history = [
         session.history[0] as LlmMessage,
@@ -1414,7 +1527,10 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     let text = "";
     let reasoning = "";
 
-    const pendingCalls = new Map<number, { id: string; name: string; arguments: string }>();
+    const pendingCalls = new Map<
+      number,
+      { id: string; name: string; arguments: string }
+    >();
     const tools = [...LLM_TOOLS, ...session.mcpToolDefinitions];
     const iterator = (llm as PollinationsLlm).chat({
       messages: session.history,
@@ -1448,7 +1564,11 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
         });
       }
       for (const delta of chunk.toolCalls ?? []) {
-        const accumulated = pendingCalls.get(delta.index) ?? { id: "", name: "", arguments: "" };
+        const accumulated = pendingCalls.get(delta.index) ?? {
+          id: "",
+          name: "",
+          arguments: "",
+        };
         if (delta.id) accumulated.id = delta.id;
         if (delta.name) accumulated.name = delta.name;
         if (delta.arguments) accumulated.arguments += delta.arguments;
@@ -1475,7 +1595,8 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       info?.completionPrice ?? (info?.group.endsWith("-free") ? 0 : null);
     const incrementalCost =
       promptPrice !== null && completionPrice !== null
-        ? usage.promptTokens * promptPrice + usage.completionTokens * completionPrice
+        ? usage.promptTokens * promptPrice +
+          usage.completionTokens * completionPrice
         : null;
     if (incrementalCost !== null) session.costSoFar += incrementalCost;
 
@@ -1517,9 +1638,13 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
         },
       }));
 
-    const assistantMessage: LlmMessage = { role: "assistant", content: text || null };
+    const assistantMessage: LlmMessage = {
+      role: "assistant",
+      content: text || null,
+    };
     assistantMessage.reasoning_content = reasoning;
-    if (calls.length > 0) assistantMessage.tool_calls = calls.map(({ call }) => call);
+    if (calls.length > 0)
+      assistantMessage.tool_calls = calls.map(({ call }) => call);
     session.history.push(assistantMessage);
 
     if (calls.length === 0) return { kind: "text" };
@@ -1548,7 +1673,11 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
         // `calls` is built with `arguments || "{}"` upstream, so there is no
         // empty string left to fall back on here.
         const parsed: unknown = JSON.parse(call.function.arguments);
-        if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+        if (
+          typeof parsed === "object" &&
+          parsed !== null &&
+          !Array.isArray(parsed)
+        ) {
           input = parsed as Record<string, unknown>;
         } else {
           parseError = "Tool arguments must be a JSON object";
@@ -1559,7 +1688,9 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
 
       const title = parseError
         ? `Call ${call.function.name}`
-        : (mcpBinding?.title(input) ?? definition?.title(input) ?? call.function.name);
+        : (mcpBinding?.title(input) ??
+          definition?.title(input) ??
+          call.function.name);
 
       await notify({
         sessionUpdate: "tool_call",
@@ -1655,27 +1786,35 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     if (session.allowedTools.has(name as ToolName)) return true;
 
     try {
-      const response = await params.client.request(methods.client.session.requestPermission, {
-        sessionId: session.id,
-        toolCall: {
-          toolCallId: params.toolCallId,
-          title: params.title,
-          name: params.name,
-          kind: params.kind,
-          status: "pending",
-          rawInput: params.input,
+      const response = await params.client.request(
+        methods.client.session.requestPermission,
+        {
+          sessionId: session.id,
+          toolCall: {
+            toolCallId: params.toolCallId,
+            title: params.title,
+            name: params.name,
+            kind: params.kind,
+            status: "pending",
+            rawInput: params.input,
+          },
+          options: [
+            { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
+            {
+              optionId: "allow-always",
+              name: `Allow ${name} for this session`,
+              kind: "allow_always",
+            },
+            { optionId: "reject-once", name: "Reject", kind: "reject_once" },
+          ],
         },
-        options: [
-          { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
-          { optionId: "allow-always", name: `Allow ${name} for this session`, kind: "allow_always" },
-          { optionId: "reject-once", name: "Reject", kind: "reject_once" },
-        ],
-      });
+      );
 
       if (response.outcome.outcome !== "selected") return false;
       const optionId = response.outcome.optionId;
       const kind = ["allow-once", "allow-always"].includes(optionId);
-      if (optionId === "allow-always") session.allowedTools.add(name as ToolName);
+      if (optionId === "allow-always")
+        session.allowedTools.add(name as ToolName);
       return kind;
     } catch {
       // A client that does not implement the method cannot grant permission.
@@ -1732,8 +1871,12 @@ function toToolCallContent(result: ToolExecutionResult): ToolCallContent[] {
       newText: result.diff.newText,
     });
   }
-  if (result.terminalId) content.push({ type: "terminal", terminalId: result.terminalId });
-  content.push({ type: "content", content: { type: "text", text: result.output } });
+  if (result.terminalId)
+    content.push({ type: "terminal", terminalId: result.terminalId });
+  content.push({
+    type: "content",
+    content: { type: "text", text: result.output },
+  });
 
   return content;
 }
@@ -1766,7 +1909,8 @@ function toRequestError(error: unknown): RequestError {
   // gate swallows a client that refuses to answer, so no `ToolError` escapes
   // into this funnel either; the branch is the contract if that changes.
   /* v8 ignore next */
-  if (error instanceof ToolError) return RequestError.internalError(undefined, error.message);
+  if (error instanceof ToolError)
+    return RequestError.internalError(undefined, error.message);
   if (error instanceof Error && error.name === "AbortError") {
     return RequestError.requestCancelled();
   }

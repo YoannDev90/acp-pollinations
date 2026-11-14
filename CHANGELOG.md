@@ -7,6 +7,12 @@ how versions are chosen and releases are cut is in
 [CONTRIBUTING.md](CONTRIBUTING.md#versioning-and-releases). Feature-by-feature
 protocol status lives in [COVERAGE.md](COVERAGE.md) rather than here.
 
+## [2.0.1]
+
+### Added
+
+- placeholder for 2.0.1 release
+
 ## [Unreleased]
 
 Nothing has been published to npm yet, so every entry below ships for the
