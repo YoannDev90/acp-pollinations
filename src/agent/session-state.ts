@@ -1,5 +1,6 @@
 import type { LlmMessage } from "../llm.js";
 import type { McpConnection, McpToolBinding } from "../mcp/index.js";
+import type { Skill } from "../skills.js";
 import type { ToolName } from "../tools/index.js";
 
 export type SessionState = {
@@ -20,6 +21,8 @@ export type SessionState = {
   mcpConnections: McpConnection[];
   mcpTools: Map<string, McpToolBinding>;
   mcpToolDefinitions: import("../llm.js").LlmToolDefinition[];
+  /** Skills discovered when the session was opened; see `src/skills.ts`. */
+  skills: Skill[];
 };
 
 export function createSessionState(params: {
@@ -27,7 +30,12 @@ export function createSessionState(params: {
   cwd: string;
   roots: string[];
   model: string;
+  /** Mode the session opens in; `build` when the caller has no preference. */
+  mode?: string;
+  /** Reasoning effort the session opens at; `medium` by default. */
+  reasoningLevel?: string;
   history?: LlmMessage[];
+  skills?: Skill[];
 }): SessionState {
   return {
     id: params.id,
@@ -36,8 +44,8 @@ export function createSessionState(params: {
     history: params.history ?? [],
     model: params.model,
     title: undefined,
-    reasoningLevel: "medium",
-    mode: "build",
+    reasoningLevel: params.reasoningLevel ?? "medium",
+    mode: params.mode ?? "build",
     deleted: false,
     allowedTools: new Set(),
     abort: null,
@@ -47,5 +55,6 @@ export function createSessionState(params: {
     mcpConnections: [],
     mcpTools: new Map(),
     mcpToolDefinitions: [],
+    skills: params.skills ?? [],
   };
 }

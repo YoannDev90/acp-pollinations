@@ -41,6 +41,21 @@ export { createSseParser } from "./sse.js";
 export type { SseEvent } from "./sse.js";
 
 export {
+  SKILL_FILE_NAME,
+  defaultSkillRoots,
+  discoverSkills,
+  findSkill,
+  isSkillCommandName,
+  parseSkillMetadata,
+  readSkillBody,
+  renderSkillInvocation,
+  renderSkillsIndex,
+  skillCommandDescription,
+  stripFrontmatter,
+} from "./skills.js";
+export type { Skill } from "./skills.js";
+
+export {
   FALLBACK_MODELS,
   MODEL_CATALOG_TTL_MS,
   MODEL_CONFIG_ID,

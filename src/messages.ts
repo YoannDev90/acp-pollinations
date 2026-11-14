@@ -2,6 +2,8 @@ import { resolve } from "node:path";
 
 import type { ContentBlock } from "@agentclientprotocol/sdk";
 import type { LlmMessage } from "./llm.js";
+import { renderSkillsIndex } from "./skills.js";
+import type { Skill } from "./skills.js";
 
 /** Renders the prompt's content blocks as one text message for the model. */
 export function promptToText(blocks: ContentBlock[]): string {
@@ -29,7 +31,8 @@ export function promptToText(blocks: ContentBlock[]): string {
   return parts.join("\n\n").trim() || "(empty prompt)";
 }
 
-export function systemMessage(cwd: string): LlmMessage {
+export function systemMessage(cwd: string, skills: readonly Skill[] = []): LlmMessage {
+  const skillIndex = renderSkillsIndex(skills);
   return {
     role: "system",
     content: [
@@ -42,6 +45,7 @@ export function systemMessage(cwd: string): LlmMessage {
       "- Use `bash` to build, lint, and test; check the exit code before claiming success.",
       "- Keep answers short and in the user's language. Use Markdown for anything longer than two sentences.",
       "- Never invent file paths, APIs, or results you did not observe.",
+      ...(skillIndex ? ["", skillIndex] : []),
     ].join("\n"),
   };
 }
@@ -50,12 +54,13 @@ export function rebaseHistory(
   history: LlmMessage[],
   cwd: string,
   previousCwd: string,
+  skills: readonly Skill[] = [],
 ): LlmMessage[] {
   const hasSystem = history[0]?.role === "system";
   const rebased =
     hasSystem && resolve(previousCwd) === resolve(cwd)
       ? history
-      : [systemMessage(cwd), ...(hasSystem ? history.slice(1) : history)];
+      : [systemMessage(cwd, skills), ...(hasSystem ? history.slice(1) : history)];
   // Reasoning models require `reasoning_content` on every earlier assistant
   // message. Older persisted sessions may lack it, so backfill an empty value.
   return rebased.map((message) =>

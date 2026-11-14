@@ -9,15 +9,19 @@ import type { LlmToolDefinition } from "../llm.js";
 import type { McpToolBinding } from "../mcp/index.js";
 import { ToolError } from "../errors.js";
 import { resolveInRoots } from "../paths.js";
+import { findSkill, readSkillBody } from "../skills.js";
+import type { Skill } from "../skills.js";
 
 export { ToolError } from "../errors.js";
 
 /**
  * The tools this agent ships.
  *
- * A closed set on purpose: each one is implemented in this file and confined
- * to the session's roots, and the names are wire-visible — renaming one is a
- * breaking change for clients that pattern-match on them.
+ * A closed set on purpose: each one is implemented in this file, the file
+ * tools are confined to the session's roots — the skill tools deliberately
+ * are not, because a skill lives outside the workspace — and the names are
+ * wire-visible, so renaming one is a breaking change for clients that
+ * pattern-match on them.
  */
 export type ToolName =
   | "read_file"
@@ -26,6 +30,8 @@ export type ToolName =
   | "list_dir"
   | "glob"
   | "grep"
+  | "list_skills"
+  | "read_skill"
   | "bash";
 
 /** A place in a file the client can open, to follow what the agent did. */
@@ -75,6 +81,11 @@ export type ToolContext = {
    */
   mcpTools?: Map<string, McpToolBinding>;
   /**
+   * Skills installed for this session, which is what `list_skills` and
+   * `read_skill` resolve against — never the filesystem at large.
+   */
+  skills?: readonly Skill[];
+  /**
    * Resolves whether a mutating tool may run. Returning `false` aborts the
    * tool call without failing the turn.
    */
@@ -100,6 +111,10 @@ const MAX_OUTPUT_CHARS = 20_000;
 const MAX_MATCHES = 50;
 const MAX_GLOB_RESULTS = 200;
 const MAX_FILE_BYTES = 1_000_000;
+/** Per-line cap for a skill description echoed back to the model. */
+const MAX_SKILL_LINE_CHARS = 300;
+/** How many names an unknown-skill error lists before it stops being useful. */
+const MAX_LISTED_SKILLS = 50;
 const SKIP_DIRECTORIES = new Set([
   ".git",
   "node_modules",
@@ -226,6 +241,34 @@ export const TOOL_DEFINITIONS: Record<ToolName, ToolDefinition> = {
       },
     },
   },
+  list_skills: {
+    kind: "read",
+    mutating: false,
+    title: () => "List skills",
+    function: {
+      name: "list_skills",
+      description:
+        "List the Agent Skills installed for this session, one per line with its name and what it does. Skills are instructions the user installed; load one with `read_skill` before following it.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  read_skill: {
+    kind: "read",
+    mutating: false,
+    title: (input) => `Read skill ${argText(input.name, "<name>")}`,
+    function: {
+      name: "read_skill",
+      description:
+        "Read the full instructions of an installed skill by name. Skills live outside the workspace, so this is the only way to load one.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Skill name, as listed by `list_skills`" },
+        },
+        required: ["name"],
+      },
+    },
+  },
   bash: {
     kind: "execute",
     mutating: true,
@@ -313,6 +356,10 @@ export async function executeTool(
         return await globTool(input, ctx);
       case "grep":
         return await grepTool(input, ctx);
+      case "list_skills":
+        return listSkillsTool(ctx);
+      case "read_skill":
+        return await readSkillTool(input, ctx);
       case "bash":
         return await bashTool(input, ctx);
       default:
@@ -350,6 +397,68 @@ function clip(value: string): string {
   return value.length <= MAX_OUTPUT_CHARS
     ? value
     : `${value.slice(0, MAX_OUTPUT_CHARS)}\n… output truncated (${value.length} characters total)`;
+}
+
+/* ------------------------------------------------------------------ *
+ * Skills
+ * ------------------------------------------------------------------ */
+
+/**
+ * Lists the skills the session discovered.
+ *
+ * The index in the system prompt is budgeted, so a long tail of skills is
+ * only reachable from here; the model should never have to guess a name it
+ * cannot see.
+ */
+function listSkillsTool(ctx: ToolContext): ToolExecutionResult {
+  const skills = ctx.skills ?? [];
+  if (skills.length === 0) {
+    return { output: "No skills are installed for this session." };
+  }
+
+  const lines = skills.map(
+    (skill) =>
+      `${skill.name}\t${truncate(skill.description || `Skill ${skill.name}`, MAX_SKILL_LINE_CHARS)}`,
+  );
+  return { output: lines.join("\n") };
+}
+
+/**
+ * Loads one skill's instructions.
+ *
+ * Skills are resolved against the discovered set rather than the filesystem,
+ * so the tool cannot be pointed at an arbitrary path outside the workspace —
+ * it reads exactly the files `discoverSkills` already vetted.
+ */
+async function readSkillTool(
+  input: Record<string, unknown>,
+  ctx: ToolContext,
+): Promise<ToolExecutionResult> {
+  const name = argText(input.name, "").trim();
+  if (!name) return { output: "read_skill requires a `name`.", isError: true };
+
+  const skills = ctx.skills ?? [];
+  const skill = findSkill(skills, name);
+  if (!skill) {
+    const available = skills.slice(0, MAX_LISTED_SKILLS).map((entry) => entry.name).join(", ");
+    return {
+      output: skills.length
+        ? `Unknown skill "${name}". Available: ${available}`
+        : `Unknown skill "${name}". No skills are installed for this session.`,
+      isError: true,
+    };
+  }
+
+  try {
+    return { output: await readSkillBody(skill), locations: [{ path: skill.path }] };
+  } catch (error) {
+    return {
+      output: `Could not read skill "${skill.name}": ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      isError: true,
+    };
+  }
 }
 
 /* ------------------------------------------------------------------ *

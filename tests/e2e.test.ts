@@ -53,6 +53,9 @@ async function withAgentProcess(turns: FakeTurn[], op: Op): Promise<void> {
           // Never inherit a developer's real credentials into the child.
           POLLINATIONS_HOME: workspace.path,
           ACP_PERMISSION_MODE: "ask",
+          // Present but empty: skills stay off, so the child never reads the
+          // machine running the suite.
+          ACP_SKILL_ROOTS: "",
         },
       },
       async (harness) => op(harness, server),

@@ -7,6 +7,7 @@ import type { AgentContext } from "@agentclientprotocol/sdk";
 import { LLM_TOOLS, TOOL_DEFINITIONS, executeTool, globToRegExp } from "../src/tools/index.js";
 import type { ToolContext, ToolExecutionResult } from "../src/tools/index.js";
 import type { McpToolBinding } from "../src/mcp/index.js";
+import type { Skill } from "../src/skills.js";
 import { createTmpDir } from "./helpers/tmp.js";
 
 /** Workspaces are created per test and removed once the file finishes. */
@@ -997,6 +998,12 @@ describe("executeTool", () => {
     expect(TOOL_DEFINITIONS.grep.title({ pattern: "needle" })).toBe("Search for needle");
     expect(TOOL_DEFINITIONS.grep.title({ pattern: { nested: true } })).toBe("Search for ");
 
+    // Same for the skill tools: they never ask permission, so `executeTool`
+    // never renders their titles either.
+    expect(TOOL_DEFINITIONS.list_skills.title({})).toBe("List skills");
+    expect(TOOL_DEFINITIONS.read_skill.title({ name: "caveman" })).toBe("Read skill caveman");
+    expect(TOOL_DEFINITIONS.read_skill.title({})).toBe("Read skill <name>");
+
     // A long command would otherwise push the client's title list off screen.
     expect(TOOL_DEFINITIONS.bash.title({ command: "x".repeat(200) })).toHaveLength(84);
     expect(TOOL_DEFINITIONS.bash.title({ command: "x".repeat(200) }).endsWith("…")).toBe(true);
@@ -1014,6 +1021,82 @@ describe("executeTool", () => {
       expect(tool.type).toBe("function");
       expect(TOOL_DEFINITIONS).toHaveProperty(tool.function.name);
     }
+  });
+
+  describe("skill tools", () => {
+    const skill: Skill = {
+      name: "fixture-skill",
+      description: "A fixture skill.",
+      path: "/nowhere/SKILL.md",
+    };
+
+    it("lists the skills the session discovered", async () => {
+      const { context } = await makeWorkspace({ skills: [skill] });
+
+      const result = await executeTool("list_skills", {}, context);
+
+      expectSuccess(result);
+      expect(result.output).toContain("fixture-skill");
+      expect(result.output).toContain("A fixture skill.");
+    });
+
+    it("says so when the session has none", async () => {
+      const { context } = await makeWorkspace();
+
+      const result = await executeTool("list_skills", {}, context);
+
+      expect(result.output).toBe("No skills are installed for this session.");
+    });
+
+    it("requires a name", async () => {
+      const { context } = await makeWorkspace({ skills: [skill] });
+
+      await expectFailure(executeTool("read_skill", {}, context), /requires a `name`/);
+      await expectFailure(executeTool("read_skill", { name: "" }, context), /requires a `name`/);
+    });
+
+    it("reports an unknown name together with what is installed", async () => {
+      const { context } = await makeWorkspace({ skills: [skill] });
+
+      await expectFailure(
+        executeTool("read_skill", { name: "ghost" }, context),
+        /Available: fixture-skill/,
+      );
+    });
+
+    it("reports an unknown name when nothing is installed", async () => {
+      const { context } = await makeWorkspace();
+
+      await expectFailure(
+        executeTool("read_skill", { name: "ghost" }, context),
+        /No skills are installed/,
+      );
+    });
+
+    it("reads a skill file that sits outside the workspace", async () => {
+      const root = await createTmpDir("acp-skill-tool");
+      cleanups.push(root.cleanup);
+      const path = join(root.path, "SKILL.md");
+      await writeFile(path, "---\nname: fixture\n---\nBody of the skill.\n", "utf8");
+      const { context } = await makeWorkspace({ skills: [{ name: "fixture", description: "", path }] });
+
+      const result = await executeTool("read_skill", { name: "fixture" }, context);
+
+      expectSuccess(result);
+      expect(result.output).toBe("Body of the skill.");
+      expect(result.locations?.[0]?.path).toBe(path);
+    });
+
+    it("fails cleanly when the skill file has disappeared", async () => {
+      const { context } = await makeWorkspace({
+        skills: [{ name: "gone", description: "", path: join("/nope", "SKILL.md") }],
+      });
+
+      await expectFailure(
+        executeTool("read_skill", { name: "gone" }, context),
+        /Could not read skill "gone"/,
+      );
+    });
   });
 });
 

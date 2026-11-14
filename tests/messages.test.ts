@@ -7,6 +7,19 @@ describe("systemMessage", () => {
   it("names the workspace it was built for", () => {
     expect(systemMessage("/workspace").content).toContain("/workspace");
   });
+
+  it("appends the index of the skills installed for the session", () => {
+    const message = systemMessage("/workspace", [
+      { name: "alpha", description: "Does things.", path: "/a/SKILL.md" },
+    ]);
+
+    expect(message.content).toContain("Skills installed for this session");
+    expect(message.content).toContain("`alpha`: Does things.");
+  });
+
+  it("leaves the index out when no skill is installed", () => {
+    expect(systemMessage("/workspace", []).content).not.toContain("read_skill");
+  });
 });
 
 describe("rebaseHistory", () => {
@@ -36,6 +49,15 @@ describe("rebaseHistory", () => {
     expect(rebased).toHaveLength(2);
     expect(rebased[0]?.role).toBe("system");
     expect(rebased[1]?.content).toBe("hello");
+  });
+
+  it("carries the current skill index into a rebuilt system prompt", () => {
+    const history: LlmMessage[] = [systemMessage("/old"), assistant];
+    const rebased = rebaseHistory(history, "/new", "/old", [
+      { name: "alpha", description: "Does things.", path: "/a" },
+    ]);
+
+    expect(rebased[0]?.content).toContain("`alpha`: Does things.");
   });
 
   it("backfills reasoning on older assistant turns that predate it", () => {

@@ -18,7 +18,15 @@ import type {
   ToolKind,
 } from "@agentclientprotocol/sdk";
 
-import type { AgentConfig } from "../config.js";
+import type { AgentConfig, ResolveConfigOptions } from "../config.js";
+import {
+  MODE_VALUES,
+  REASONING_VALUES,
+  describeSettings,
+  resolveSessionDefaults,
+} from "../config.js";
+import { ensureSettingsFile, openSettingsFile } from "../settings-file.js";
+import type { OpenSettingsResult } from "../settings-file.js";
 import { LlmError, PollinationsLlm } from "../llm.js";
 import type { LlmMessage, LlmToolCall } from "../llm.js";
 import {
@@ -34,6 +42,16 @@ import { createSessionStore } from "../sessions/index.js";
 import type { PersistedSession } from "../sessions/index.js";
 import { LLM_TOOLS, TOOL_DEFINITIONS, ToolError, executeTool } from "../tools/index.js";
 import { promptToText, rebaseHistory, systemMessage } from "../messages.js";
+import {
+  defaultSkillRoots,
+  discoverSkills,
+  findSkill,
+  isSkillCommandName,
+  readSkillBody,
+  renderSkillInvocation,
+  skillCommandDescription,
+} from "../skills.js";
+import type { Skill } from "../skills.js";
 import { shouldCompact, summarizeTranscript } from "../compaction.js";
 import { connectionKey, createNotifier } from "../connection.js";
 import type { SessionState } from "./session-state.js";
@@ -72,18 +90,31 @@ const REASONING_CONFIG_ID = "reasoning";
  */
 const TURN_SETTLE_MS = 1_000;
 
-const REASONING_LEVELS: ReadonlyArray<{ value: string; name: string }> = [
-  { value: "none", name: "None" },
-  { value: "low", name: "Low" },
-  { value: "medium", name: "Medium" },
-  { value: "high", name: "High" },
-];
+const REASONING_TEXT: Record<(typeof REASONING_VALUES)[number], string> = {
+  none: "None",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+};
 
-const AVAILABLE_MODES: ReadonlyArray<{ id: string; name: string; description: string }> = [
-  { id: "build", name: "Build", description: "Implement changes" },
-  { id: "plan", name: "Plan", description: "Plan without editing" },
-  { id: "ask", name: "Ask", description: "Answer questions" },
-];
+/**
+ * Display names for every effort `config.ts` accepts.
+ *
+ * Built from the validated ids rather than listed twice, so a level added to
+ * the settings file is advertised here without a second edit to forget.
+ */
+const REASONING_LEVELS: ReadonlyArray<{ value: string; name: string }> =
+  REASONING_VALUES.map((value) => ({ value, name: REASONING_TEXT[value] }));
+
+const MODE_TEXT: Record<(typeof MODE_VALUES)[number], { name: string; description: string }> = {
+  build: { name: "Build", description: "Implement changes" },
+  plan: { name: "Plan", description: "Plan without editing" },
+  ask: { name: "Ask", description: "Answer questions" },
+};
+
+/** The modes a session can run in; see {@link REASONING_LEVELS}. */
+const AVAILABLE_MODES: ReadonlyArray<{ id: string; name: string; description: string }> =
+  MODE_VALUES.map((id) => ({ id, ...MODE_TEXT[id] }));
 
 /** What a slash command is handed when it runs. */
 type SlashCommandContext = {
@@ -123,6 +154,22 @@ export type CreatePollinationsAgentOptions = {
    * which is what the tests want.
    */
   catalogTtlMs?: number;
+  /**
+   * Overrides for reading the settings file, for tests.
+   *
+   * Defaults to the process environment and the real home directory, which
+   * is what a deployed agent wants and what a test must not get: without
+   * this, a developer's own `config-acp` would silently decide the model and
+   * mode of every session a test opens.
+   */
+  settings?: ResolveConfigOptions;
+  /**
+   * Injected settings-file opener, for tests.
+   *
+   * Defaults to {@link openSettingsFile}, which would otherwise hand a real
+   * editor (or `xdg-open`) a window on the machine running the test.
+   */
+  openSettings?: (path: string) => Promise<OpenSettingsResult>;
 };
 
 /**
@@ -194,6 +241,74 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
   }
 
   /* ---------------------------------------------------------------- *
+   * Settings
+   * ---------------------------------------------------------------- */
+
+  /** Opens the settings file; see {@link CreatePollinationsAgentOptions}. */
+  const openSettings: (path: string) => Promise<OpenSettingsResult> =
+    options.openSettings ?? ((path) => openSettingsFile(path));
+
+  /**
+   * Session-scoped settings for the session about to open, re-read from the
+   * settings file.
+   *
+   * Editing the file has to reach the next session without a restart — that
+   * is what makes the file worth editing — so `session/new` asks again
+   * instead of trusting the startup snapshot. A home with no readable
+   * settings, or one that turned corrupt since boot, keeps the values the
+   * agent started with rather than failing a session over a file.
+   */
+  async function sessionDefaults(): Promise<
+    Pick<AgentConfig, "model" | "defaultMode" | "defaultReasoning" | "mcpServers">
+  > {
+    try {
+      return await resolveSessionDefaults(config, settingsOptions());
+    } catch (error) {
+      process.stderr.write(
+        `${AGENT_TITLE}: settings could not be re-read ` +
+          `(${error instanceof Error ? error.message : String(error)}); keeping the startup values\n`,
+      );
+      return config;
+    }
+  }
+
+  /**
+   * Settings reader bound to the file this configuration resolved at startup.
+   *
+   * The config's own path wins: it is the file the process actually probed,
+   * so a session and `/config` cannot drift onto a different candidate than
+   * the one the startup log named. The injection point is for tests, which
+   * have no home directory to derive a path from.
+   */
+  function settingsOptions(): ResolveConfigOptions {
+    const injected = options.settings ?? {};
+    return config.settingsFile !== undefined
+      ? { ...injected, settingsFile: config.settingsFile }
+      : injected;
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Skills
+   * ---------------------------------------------------------------- */
+
+  /**
+   * Skills visible to a session.
+   *
+   * Pinned roots replace the defaults rather than adding to them, so a
+   * deployment that sets `skillRoots` gets exactly what it named — including
+   * nothing at all. Discovery runs per session because the workspace roots
+   * only exist once the client has opened one.
+   */
+  async function skillsForSession(roots: readonly string[]): Promise<Skill[]> {
+    const scan = config.skillRoots ?? defaultSkillRoots(roots);
+    const skills = await discoverSkills(scan);
+    process.stderr.write(
+      `${AGENT_TITLE}: skills discovered=${skills.length} roots=${scan.length}\n`,
+    );
+    return skills;
+  }
+
+  /* ---------------------------------------------------------------- *
    * Slash commands
    * ---------------------------------------------------------------- */
 
@@ -211,11 +326,18 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     help: {
       description: "Show available commands",
       takesArg: true,
-      run: () =>
-        "Available commands:\n" +
-        Object.entries(SLASH_COMMANDS)
+      run: ({ session }) => {
+        const commands = Object.entries(SLASH_COMMANDS)
           .map(([name, command]) => `- /${name.padEnd(10)}${command.description}`)
-          .join("\n"),
+          .join("\n");
+        // Skills are advertised next to the table, so they are listed next to
+        // it too: what the client shows and what `/help` prints stay the same
+        // set, which is the drift this section exists to prevent.
+        const skills = advertisedSkills(session.skills)
+          .map((skill) => `- /${skill.name.padEnd(10)}${skillCommandDescription(skill)}`)
+          .join("\n");
+        return "Available commands:\n" + commands + (skills ? `\n\nSkills:\n${skills}` : "");
+      },
     },
     status: {
       description: "Show session status",
@@ -227,6 +349,41 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
         `Reasoning: ${session.reasoningLevel}\n` +
         `Last prompt tokens: ${session.lastPromptTokens}\n` +
         `Cost so far: ${session.costSoFar.toFixed(6)} pollen`,
+    },
+    config: {
+      description: "Show or open the settings file",
+      takesArg: true,
+      run: async ({ arg }) => {
+        if (arg && arg !== "show") {
+          return (
+            `Unknown argument "${arg}". Use \`/config\` to open the settings file, ` +
+            `or \`/config show\` to list the values in effect.`
+          );
+        }
+        // A hand-assembled configuration has no home directory behind it, so
+        // there is no file to describe or open; saying so beats guessing a
+        // path the agent never read.
+        if (!config.settingsFile) {
+          return "This configuration has no settings file; there is nothing to show or open.";
+        }
+
+        const rows = await describeSettings(settingsOptions());
+
+        if (arg === "show") {
+          return [...rows, "", `Settings file: ${config.settingsFile}`].join("\n");
+        }
+
+        const { created } = await ensureSettingsFile(config.settingsFile, config);
+        const opened = await openSettings(config.settingsFile);
+        return [
+          ...rows,
+          "",
+          created ? `Created ${config.settingsFile}` : `Settings file: ${config.settingsFile}`,
+          opened.opened
+            ? `Opened with ${opened.via}.`
+            : "No editor could be started; edit the file by hand.",
+        ].join("\n");
+      },
     },
     model: {
       description: "Show or switch the model",
@@ -275,7 +432,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       description: "Clear the conversation",
       takesArg: false,
       run: ({ session }) => {
-        session.history = [systemMessage(session.cwd)];
+        session.history = [systemMessage(session.cwd, session.skills)];
         session.lastPromptTokens = 0;
         session.costSoFar = 0;
         session.title = undefined;
@@ -297,6 +454,27 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
           `Built-in tools: ${Object.keys(TOOL_DEFINITIONS).join(", ")}\n` +
           `MCP tools: ${mcp.length ? mcp.join(", ") : "(none)"}`
         );
+      },
+    },
+    skills: {
+      description: "List installed skills",
+      takesArg: true,
+      run: ({ session, arg }) => {
+        if (session.skills.length === 0) return "No skills are installed for this session.";
+        const needle = arg.trim().toLowerCase();
+        const matches = needle
+          ? session.skills.filter(
+              (skill) =>
+                skill.name.toLowerCase().includes(needle) ||
+                skill.description.toLowerCase().includes(needle),
+            )
+          : session.skills;
+        if (matches.length === 0) {
+          return `No skill matches "${arg}" (${session.skills.length} installed).`;
+        }
+        return matches
+          .map((skill) => `${skill.name}\t${skillCommandDescription(skill)}`)
+          .join("\n");
       },
     },
     compact: {
@@ -340,11 +518,59 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     },
   };
 
-  /** Command list advertised to the client, derived from the table above. */
-  const availableCommands = Object.entries(SLASH_COMMANDS).map(([name, command]) => ({
-    name,
-    description: command.description,
-  }));
+  /**
+   * Skills safe to present as commands.
+   *
+   * A name the table already owns loses to the built-in — `/clear` must keep
+   * clearing — and a name a client's palette cannot echo back is left to the
+   * model, which reaches it through `list_skills` instead.
+   */
+  const advertisedSkills = (skills: readonly Skill[]): Skill[] =>
+    skills.filter((skill) => !SLASH_COMMANDS[skill.name] && isSkillCommandName(skill.name));
+
+  /** Command list advertised to the client: the table above, plus the skills. */
+  function availableCommandsFor(
+    skills: readonly Skill[],
+  ): Array<{ name: string; description: string }> {
+    const commands = Object.entries(SLASH_COMMANDS).map(([name, command]) => ({
+      name,
+      description: command.description,
+    }));
+    for (const skill of advertisedSkills(skills)) {
+      commands.push({ name: skill.name, description: skillCommandDescription(skill) });
+    }
+    return commands;
+  }
+
+  /**
+   * Expands a leading `/skill-name` into the text the model should read.
+   *
+   * Returns `null` when the first token is not a skill, so an unknown slash
+   * command keeps reaching the model as the plain message it has always been.
+   * The built-in table wins over a skill of the same name, which is what
+   * keeps `/clear` clearing rather than loading instructions.
+   */
+  async function expandSkillInvocation(
+    text: string,
+    skills: readonly Skill[],
+  ): Promise<string | null> {
+    const [head, ...rest] = text.split(/\s+/);
+    if (!head?.startsWith("/")) return null;
+
+    const name = head.slice(1);
+    if (!name || SLASH_COMMANDS[name]) return null;
+
+    const skill = findSkill(skills, name);
+    if (!skill) return null;
+
+    let body: string;
+    try {
+      body = await readSkillBody(skill);
+    } catch (error) {
+      body = `The skill file could not be read: ${(error as Error).message}`;
+    }
+    return renderSkillInvocation(skill, body, rest.join(" "));
+  }
 
   const app = agent({ name: AGENT_NAME });
 
@@ -399,32 +625,44 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     }
 
     const sessionId = `sess_${randomBytes(9).toString("hex")}`;
-    const model = config.model;
+    const defaults = await sessionDefaults();
+    const model = defaults.model;
+    const skills = await skillsForSession(roots);
     const session = createSessionState({
       id: sessionId,
       cwd: roots[0] as string,
       roots,
       model,
-      history: [systemMessage(roots[0] as string)],
+      mode: defaults.defaultMode,
+      reasoningLevel: defaults.defaultReasoning,
+      history: [systemMessage(roots[0] as string, skills)],
+      skills,
     });
     sessions.set(sessionId, session);
 
+    // Settings-file servers first: a client that names the same server gets
+    // the last word, which is what makes an override possible at all.
+    const configuredServers = [...(defaults.mcpServers ?? []), ...ctx.params.mcpServers];
+
     process.stderr.write(
       `${AGENT_TITLE}: session/new id=${sessionId} cwd=${roots[0]} model=${model} ` +
-        `mcpServers=${ctx.params.mcpServers.length}\n`,
+        `mode=${session.mode} reasoning=${session.reasoningLevel} ` +
+        `mcpServers=${configuredServers.length}\n`,
     );
 
-    // Connect to any MCP servers the client supplied. A failure here degrades
-    // to "no tools from that server" rather than failing session setup.
-    const connections = await connectMcpServers(ctx.params.mcpServers);
+    // Connect to the MCP servers from the settings file and the client. A
+    // failure here degrades to "no tools from that server" rather than
+    // failing session setup.
+    const connections = await connectMcpServers(configuredServers);
 
     const notify = createNotifier(ctx.client, sessionId);
+    const commands = availableCommandsFor(skills);
     // Defer so the client has attached its session-update handler before the
     // notification arrives (some clients drop early notifications).
     setTimeout(() => {
       void notify({
         sessionUpdate: "available_commands_update",
-        availableCommands,
+        availableCommands: commands,
       });
     }, 50);
     session.mcpConnections = connections;
@@ -438,12 +676,12 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     return {
       sessionId,
       modes: {
-        currentModeId: "build",
+        currentModeId: session.mode,
         availableModes: [...AVAILABLE_MODES],
       },
       configOptions: [
         buildModelOption(await modelCatalog(), model),
-        buildReasoningOption("medium"),
+        buildReasoningOption(session.reasoningLevel),
       ],
     };
   });
@@ -497,12 +735,14 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     }
 
     const root = loadedRoots[0] as string;
+    const skills = await skillsForSession(loadedRoots);
     const session = createSessionState({
       id: sessionId,
       cwd: root,
       roots: loadedRoots,
       model: stored.model,
-      history: rebaseHistory(stored.history, root, stored.cwd),
+      history: rebaseHistory(stored.history, root, stored.cwd, skills),
+      skills,
     });
     session.title = stored.title;
     session.reasoningLevel = stored.reasoningLevel ?? "medium";
@@ -525,6 +765,15 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
 
     // Replay the restored transcript so the client can render the thread again.
     const notify = createNotifier(ctx.client, sessionId);
+    // A restored session never saw `session/new` in this process, so the
+    // command list — skills included — has to be advertised again here.
+    const commands = availableCommandsFor(session.skills);
+    setTimeout(() => {
+      void notify({
+        sessionUpdate: "available_commands_update",
+        availableCommands: commands,
+      });
+    }, 50);
     for (const message of session.history) {
       if (message.role === "user") {
         await notify({
@@ -594,12 +843,14 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     }
 
     const root = loadedRoots[0] as string;
+    const skills = await skillsForSession(loadedRoots);
     const session = createSessionState({
       id: sessionId,
       cwd: root,
       roots: loadedRoots,
       model: stored.model,
-      history: rebaseHistory(stored.history, root, stored.cwd),
+      history: rebaseHistory(stored.history, root, stored.cwd, skills),
+      skills,
     });
     session.title = stored.title;
     session.reasoningLevel = stored.reasoningLevel ?? "medium";
@@ -608,6 +859,17 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     session.messageCounter = stored.messageCounter;
     session.lastPromptTokens = stored.lastPromptTokens;
     sessions.set(sessionId, session);
+
+    // Same as `session/load`: the client only learns the command list — and
+    // with it the installed skills — when somebody advertises it.
+    const notify = createNotifier(ctx.client, sessionId);
+    const commands = availableCommandsFor(session.skills);
+    setTimeout(() => {
+      void notify({
+        sessionUpdate: "available_commands_update",
+        availableCommands: commands,
+      });
+    }, 50);
 
     const connections = await connectMcpServers(ctx.params.mcpServers ?? []);
     session.mcpConnections = connections;
@@ -822,7 +1084,11 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
       // the one about to happen, so trimming first is what actually pays off.
       await maybeCompact(session, notify, abort.signal, capabilities);
 
-      await replayUserPrompt(ctx.params.prompt, notify, session);
+      // `/skill-name` is a normal turn that opens with the skill's body: the
+      // client keeps rendering what the user typed, the model reads the
+      // expanded form. Anything that is not a skill passes through untouched.
+      const skillText = await expandSkillInvocation(promptText, session.skills);
+      await replayUserPrompt(ctx.params.prompt, notify, session, skillText ?? undefined);
 
       await notify({
         sessionUpdate: "plan",
@@ -1109,14 +1375,22 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
     }
   }
 
-    async function replayUserPrompt(
+  /**
+   * Echoes the user's prompt to the client and records it for the model.
+   *
+   * `modelText` replaces what goes into the transcript when a turn was
+   * expanded — a `/skill-name` invocation carries the skill's body for the
+   * model while the client keeps showing the short form the user typed.
+   */
+  async function replayUserPrompt(
     prompt: ContentBlock[],
     notify: Notifier,
     session: SessionState,
+    modelText?: string,
   ): Promise<void> {
     const text = promptToText(prompt);
     const messageId = nextMessageId(session);
-    session.history.push({ role: "user", content: text });
+    session.history.push({ role: "user", content: modelText ?? text });
 
     await notify({
       sessionUpdate: "user_message_chunk",
@@ -1323,6 +1597,7 @@ export function createPollinationsAgent(options: CreatePollinationsAgentOptions)
           cwd: session.cwd,
           roots: session.roots,
           mode: session.mode,
+          skills: session.skills,
           client,
           clientCapabilities: capabilities,
           signal,

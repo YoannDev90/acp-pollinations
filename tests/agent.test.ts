@@ -1,4 +1,4 @@
-import { readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -77,7 +77,14 @@ async function withAgent(
     permissionMode: "ask",
     // Compaction off by default so a test never gains a surprise model call.
     compactionThresholdTokens: 0,
+    // Skills off by default so a run never reads the machine's home
+    // directory; a scenario that cares passes its own roots.
+    skillRoots: [],
     ...overrides,
+    // After the spread: `Partial<AgentConfig>` may carry an explicit
+    // `undefined`, which would otherwise leave these required fields unset.
+    defaultMode: overrides.defaultMode ?? "build",
+    defaultReasoning: overrides.defaultReasoning ?? "medium",
   };
 
   const agent = createPollinationsAgent({
@@ -119,7 +126,11 @@ async function withUnopenedSession(
     maxTurnRequests: 8,
     permissionMode: "ask",
     compactionThresholdTokens: 0,
+    skillRoots: [],
     ...overrides,
+    // After the spread, for the same reason as `withAgent`.
+    defaultMode: overrides.defaultMode ?? "build",
+    defaultReasoning: overrides.defaultReasoning ?? "medium",
   };
 
   const agent = createPollinationsAgent({
@@ -194,6 +205,9 @@ describe("createPollinationsAgent", () => {
         maxTurnRequests: 8,
         permissionMode: "ask",
         compactionThresholdTokens: 0,
+        skillRoots: [],
+        defaultMode: "build",
+        defaultReasoning: "medium",
       },
     });
 
@@ -971,6 +985,9 @@ describe("model picker", () => {
       maxTurnRequests: 8,
       permissionMode: "ask",
       compactionThresholdTokens: 0,
+      skillRoots: [],
+      defaultMode: "build",
+      defaultReasoning: "medium",
     };
 
     const agent = createPollinationsAgent({
@@ -1143,6 +1160,9 @@ describe("model picker", () => {
       maxTurnRequests: 8,
       permissionMode: "ask",
       compactionThresholdTokens: 0,
+      skillRoots: [],
+      defaultMode: "build",
+      defaultReasoning: "medium",
     };
 
     const agent = createPollinationsAgent({
@@ -1182,6 +1202,9 @@ describe("model picker", () => {
       maxTurnRequests: 8,
       permissionMode: "ask",
       compactionThresholdTokens: 0,
+      skillRoots: [],
+      defaultMode: "build",
+      defaultReasoning: "medium",
     };
 
     const agent = createPollinationsAgent({
@@ -1238,6 +1261,9 @@ describe("session restore (load and resume)", () => {
       permissionMode: "ask",
       compactionThresholdTokens: 0,
       sessionsDir: state.path,
+      skillRoots: [],
+      defaultMode: "build",
+      defaultReasoning: "medium",
     };
 
     const buildAgent = () =>
@@ -1809,6 +1835,8 @@ describe("compaction", () => {
       maxTurnRequests: 8,
       permissionMode: "ask",
       compactionThresholdTokens,
+      defaultMode: "build",
+      defaultReasoning: "medium",
     };
 
     const agent = createPollinationsAgent({
@@ -2231,6 +2259,245 @@ describe("slash commands", () => {
       await harness.prompt("/clear now");
       expect(server.requests).toHaveLength(2);
       expect(server.requests[1]?.messages.some((m) => String(m.content).includes("/clear now"))).toBe(true);
+    });
+  });
+});
+
+describe("skills", () => {
+  /** One fixture skill, written the way an installed skill looks on disk. */
+  const FIXTURE_SKILL = [
+    "---",
+    "name: fixture-skill",
+    "description: >",
+    "  A fixture skill the suite installs.",
+    "---",
+    "",
+    "Fixture instructions: answer in French.",
+  ].join("\n");
+
+  /** Writes a skill root holding one directory per entry of `skills`. */
+  async function skillRoot(skills: Record<string, string>): Promise<string> {
+    const root = await createTmpDir("acp-skills");
+    cleanups.push(root.cleanup);
+
+    for (const [name, body] of Object.entries(skills)) {
+      const directory = join(root.path, name);
+      await mkdir(directory, { recursive: true });
+      await writeFile(join(directory, "SKILL.md"), body, "utf8");
+    }
+    return root.path;
+  }
+
+  /** The command list the agent advertised, when a notification landed. */
+  function advertisedCommands(
+    harness: Harness,
+  ): Array<{ name: string; description: string }> {
+    const update = harness.updates.find(
+      (entry) => (entry as { sessionUpdate?: string }).sessionUpdate === "available_commands_update",
+    ) as { availableCommands?: Array<{ name: string; description: string }> } | undefined;
+    return update?.availableCommands ?? [];
+  }
+
+  /** Text of the tool results the client was shown, for a given status. */
+  function toolContent(harness: Harness, status?: string): string {
+    const updates = harness.updates.filter(
+      (entry) =>
+        (entry as { sessionUpdate?: string }).sessionUpdate === "tool_call_update" &&
+        (status === undefined || (entry as { status?: string }).status === status),
+    ) as Array<{ content?: Array<{ text?: string; content?: { text?: string } }> }>;
+    return updates
+      .flatMap((update) => update.content ?? [])
+      .map((block) => block.content?.text ?? block.text ?? "")
+      .join("\n");
+  }
+
+  it("advertises installed skills next to the built-in commands", async () => {
+    const root = await skillRoot({ "fixture-skill": FIXTURE_SKILL });
+
+    await withAgent([{ text: "unused" }], { skillRoots: [root] }, async ({ harness, server }) => {
+      // The notice is deferred so a client has attached its handler first.
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      await harness.prompt("/help");
+      const help = agentText(harness.updates);
+
+      const description = advertisedCommands(harness).find(
+        (command) => command.name === "fixture-skill",
+      )?.description;
+      expect(description).toContain("fixture skill");
+      // `/help` and the notice are one set: neither may drift from the other.
+      expect(help).toContain("/fixture-skill");
+      expect(help).toContain(description ?? "");
+      expect(server.requests).toHaveLength(0);
+    });
+  });
+
+  it("indexes the installed skills in the system prompt", async () => {
+    const root = await skillRoot({ "fixture-skill": FIXTURE_SKILL });
+
+    await withAgent([{ text: "unused" }], { skillRoots: [root] }, async ({ harness, server }) => {
+      await harness.prompt("hello");
+
+      const system = server.requests[0]?.messages[0];
+      expect(system?.role).toBe("system");
+      expect(String(system?.content)).toContain("fixture-skill");
+      // The index says how a skill is loaded, not just that it exists.
+      expect(String(system?.content)).toContain("read_skill");
+    });
+  });
+
+  it("lists and filters installed skills with /skills", async () => {
+    const root = await skillRoot({
+      "fixture-skill": FIXTURE_SKILL,
+      other: "---\nname: other\ndescription: Second fixture skill.\n---\nBody.\n",
+    });
+
+    await withAgent([{ text: "unused" }], { skillRoots: [root] }, async ({ harness, server }) => {
+      await harness.prompt("/skills");
+      const all = agentText(harness.updates);
+      expect(all).toContain("fixture-skill");
+      expect(all).toContain("Second fixture skill.");
+
+      const before = all.length;
+      await harness.prompt("/skills second");
+      const filtered = agentText(harness.updates).slice(before);
+      expect(filtered).toContain("other");
+      expect(filtered).not.toContain("fixture-skill");
+
+      expect(server.requests).toHaveLength(0);
+    });
+  });
+
+  it("says so when no skills are installed", async () => {
+    // The default config pins the roots to nothing, so this is the empty set.
+    await withAgent([{ text: "unused" }], {}, async ({ harness, server }) => {
+      await harness.prompt("/skills");
+
+      expect(agentText(harness.updates)).toContain("No skills are installed for this session.");
+      expect(server.requests).toHaveLength(0);
+    });
+  });
+
+  it("reads a skill body with read_skill, from outside the workspace", async () => {
+    const root = await skillRoot({ "fixture-skill": FIXTURE_SKILL });
+
+    await withAgent(
+      [
+        {
+          toolCalls: [
+            { name: "read_skill", arguments: JSON.stringify({ name: "fixture-skill" }) },
+          ],
+        },
+        { text: "done" },
+      ],
+      { skillRoots: [root] },
+      async ({ harness }) => {
+        const response = await harness.prompt("load the skill");
+
+        expect(response.stopReason).toBe("end_turn");
+        // The skill sits outside the workspace, but reading it is not a
+        // mutation, so it never asks for permission.
+        expect(harness.permissionRequests).toHaveLength(0);
+
+        const completed = harness.updates.filter(
+          (entry) =>
+            (entry as { sessionUpdate?: string }).sessionUpdate === "tool_call_update" &&
+            (entry as { status?: string }).status === "completed",
+        ) as Array<{ locations?: Array<{ path?: string }> }>;
+        const update = completed.at(-1);
+        expect(update).toBeDefined();
+        expect(toolContent(harness, "completed")).toContain("Fixture instructions: answer in French.");
+        expect(update?.locations?.[0]?.path).toBe(join(root, "fixture-skill", "SKILL.md"));
+      },
+    );
+  });
+
+  it("names the installed skills with list_skills", async () => {
+    const root = await skillRoot({ "fixture-skill": FIXTURE_SKILL });
+
+    await withAgent(
+      [{ toolCalls: [{ name: "list_skills", arguments: "{}" }] }, { text: "done" }],
+      { skillRoots: [root] },
+      async ({ harness }) => {
+        await harness.prompt("what skills exist");
+
+        expect(toolContent(harness, "completed")).toContain("fixture-skill");
+        expect(toolContent(harness, "completed")).toContain("A fixture skill the suite installs.");
+      },
+    );
+  });
+
+  it("refuses a skill name that is not installed", async () => {
+    await withAgent(
+      [{ toolCalls: [{ name: "read_skill", arguments: JSON.stringify({ name: "ghost" }) }] }, { text: "done" }],
+      {},
+      async ({ harness }) => {
+        await harness.prompt("load a skill");
+
+        expect(toolContent(harness, "failed")).toContain('Unknown skill "ghost"');
+      },
+    );
+  });
+
+  it("sends the skill body to the model when the user types /skill-name", async () => {
+    const root = await skillRoot({ "fixture-skill": FIXTURE_SKILL });
+
+    await withAgent([{ text: "unused" }], { skillRoots: [root] }, async ({ harness, server }) => {
+      await harness.prompt("/fixture-skill answer briefly");
+
+      // The client keeps the short form the user typed...
+      const echoed = harness.updates.find(
+        (entry) => (entry as { sessionUpdate?: string }).sessionUpdate === "user_message_chunk",
+      ) as { content?: { text?: string } } | undefined;
+      expect(echoed?.content?.text).toBe("/fixture-skill answer briefly");
+
+      // ...while the model reads the skill wrapped around the request.
+      const sent = JSON.stringify(server.requests[0]?.messages ?? []);
+      expect(sent).toContain("--- skill: fixture-skill");
+      expect(sent).toContain("Fixture instructions: answer in French.");
+      expect(sent).toContain("User request: answer briefly");
+    });
+  });
+
+  it("lets a built-in command win over a skill of the same name", async () => {
+    const root = await skillRoot({
+      clear: "---\nname: clear\ndescription: A skill that must not shadow /clear.\n---\nBody.\n",
+    });
+
+    await withAgent([{ text: "unused" }], { skillRoots: [root] }, async ({ harness, server }) => {
+      await new Promise((resolve) => setTimeout(resolve, 120));
+
+      await harness.prompt("/clear");
+
+      expect(agentText(harness.updates)).toContain("Conversation cleared.");
+      expect(server.requests).toHaveLength(0);
+      // Advertised once, as the built-in: the skill never becomes a second
+      // entry with the same name.
+      const clears = advertisedCommands(harness).filter((command) => command.name === "clear");
+      expect(clears).toHaveLength(1);
+      expect(clears[0]?.description).toBe("Clear the conversation");
+    });
+  });
+
+  it("keeps a skill whose name cannot be a command out of the palette", async () => {
+    const root = await skillRoot({
+      "not a command": "---\nname: not a command\ndescription: Unadvertised.\n---\nBody.\n",
+    });
+
+    await withAgent([{ text: "unused" }], { skillRoots: [root] }, async ({ harness, server }) => {
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      await harness.prompt("/help");
+      const help = agentText(harness.updates);
+
+      expect(advertisedCommands(harness).some((command) => command.name === "not a command")).toBe(
+        false,
+      );
+      expect(help).not.toContain("/not a command");
+
+      // Still reachable, just not through a palette entry.
+      const before = help.length;
+      await harness.prompt("/skills");
+      expect(agentText(harness.updates).slice(before)).toContain("not a command");
+      expect(server.requests).toHaveLength(0);
     });
   });
 });
