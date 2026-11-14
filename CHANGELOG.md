@@ -24,6 +24,11 @@ first time in 1.0.0.
   read.
 - **Tools** to read and edit files, glob and grep the workspace, and run shell
   commands — every path confined to the session's workspace roots.
+- **Agent Skills**: `~/.agents/skills`, `~/.claude/skills`, and the workspace
+  equivalents are scanned at session start, summarised into the system prompt,
+  and readable through `list_skills` / `read_skill`. Every installed skill is
+  also advertised as an ACP slash command, so `/skill-name` runs it with its
+  body in front of the request.
 - **MCP servers** over stdio, HTTP, and SSE, their tools merged into the
   picker and the permission flow.
 - **Session persistence** under `$POLLINATIONS_HOME/sessions`, reloadable

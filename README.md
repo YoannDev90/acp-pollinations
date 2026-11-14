@@ -98,8 +98,9 @@ fails with `-32000` until a key is configured.
 Configuration is read from environment variables first, then from an editable
 file `$POLLINATIONS_HOME/config-acp` (JSON, also tried as `config-acp.json`
 then `config.json`). Keys: `model`, `base_url`, `permission_mode`,
-`max_turn_requests`, `compaction_threshold_tokens`, `api_key`. Environment
-variables take precedence; only the key falls back to `credentials.json`.
+`max_turn_requests`, `compaction_threshold_tokens`, `api_key`, `skill_roots`.
+Environment variables take precedence; only the key falls back to
+`credentials.json`.
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -110,6 +111,7 @@ variables take precedence; only the key falls back to `credentials.json`.
 | `ACP_MAX_TURN_REQUESTS` | `24` | Ceiling on model requests per prompt turn. |
 | `ACP_COMPACTION_THRESHOLD_TOKENS` | `0` (auto) | Prompt tokens at/above which a transcript is summarised. `0` = 85% of the model's context window; negative disables. |
 | `ACP_PERMISSION_MODE` | `ask` | `ask` prompts before mutating; `allow` skips (CI/demos). |
+| `ACP_SKILL_ROOTS` | see [Skills](#skills) | `:`-separated directories scanned for `SKILL.md`. Present but empty disables skills. |
 
 ## Model picker
 
@@ -159,12 +161,45 @@ All tools run inside the session workspace root set:
 | `glob` | search | no |
 | `grep` | search | no |
 | `bash` | execute | yes |
+| `list_skills` | read | no |
+| `read_skill` | read | no |
 
 Mutating tools raise `session/request_permission` in `ask` mode. Read-only tools
 run without prompting. Plan mode disables mutations entirely.
 
 Slash commands: `/help`, `/status`, `/model`, `/mode`, `/reasoning`, `/clear`,
-`/cost`, `/tools`, `/compact`, `/sessions`, `/delete`.
+`/cost`, `/tools`, `/skills`, `/compact`, `/sessions`, `/delete`.
+
+## Skills
+
+[Agent Skills](https://agentskills.io) are folders of instructions the model
+loads on demand. The agent scans four roots at `session/new`, `load`, and
+`resume` — workspace roots first, then home roots, so a project copy wins a
+name collision:
+
+```
+<workspace>/.agents/skills   <workspace>/.claude/skills
+~/.agents/skills             ~/.claude/skills
+```
+
+Each root must contain `*/SKILL.md` with a YAML header (`name`,
+`description`). Only that header is read at discovery; the body is read when
+the model asks for it, so scanning stays cheap.
+
+What the model sees:
+
+- an **index** of `name: first sentence` appended to the system prompt, capped
+  at 6 000 characters — anything that does not fit is reachable with
+  `list_skills`;
+- a **`read_skill`** tool that returns one skill's body (40 000 characters,
+  then truncated), resolved against the discovered set rather than the
+  filesystem;
+- **`/skill-name`** as an ACP slash command: the client shows the description,
+  and the turn reaches the model with the skill body quoted ahead of the user's
+  request. Built-in commands (`/help`, `/model`, …) always win a name clash.
+
+Set `ACP_SKILL_ROOTS` (or `skill_roots`) to change the roots, or to an empty
+value to turn skills off entirely.
 
 ## Compaction
 
@@ -190,6 +225,7 @@ src/
 ├── sessions/index.ts      one JSON file per session, written atomically
 ├── models.ts              /v1/models catalogue and the picker option
 ├── compaction.ts          transcript summarisation
+├── skills.ts              Agent Skill discovery, index, and invocation text
 ├── messages.ts            prompt-to-text, system prompt, history rebasing
 ├── connection.ts          per-connection identity and update delivery
 ├── errors.ts              the `ToolError` the tools throw
