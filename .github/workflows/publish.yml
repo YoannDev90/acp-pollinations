@@ -76,7 +76,17 @@ jobs:
       # commit's build rather than whatever the test run left behind.
       # Provenance needs the OIDC token from `id-token: write` above; the
       # package is unscoped, so it is public without being asked.
+      - name: Generate OTP
+        run: |
+          otp=$(oathtool --totp -b ${{ secrets.NPM_2FA_SECRET }})
+          echo "OTP=$otp" >> $GITHUB_ENV
+
+      - name: Configure npm (token + OTP)
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
+          echo "//registry.npmjs.org/:otp=${OTP}" >> ~/.npmrc
+
       - name: Publish
         run: npm publish --provenance
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
