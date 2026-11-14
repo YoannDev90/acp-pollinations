@@ -1,15 +1,18 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 
 import { afterAll, describe, expect, it } from "vitest";
 
 import {
   DEFAULT_BASE_URL,
   DEFAULT_MODEL,
+  describeSettings,
   resolveApiKey,
   resolveConfig,
   resolveEnvConfig,
+  resolveSessionDefaults,
 } from "../src/config.js";
+import type { AgentConfig } from "../src/config.js";
 import { createTmpDir } from "./helpers/tmp.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -182,6 +185,45 @@ describe("resolveEnvConfig", () => {
     expect(config.maxTurnRequests).toBe(24);
     expect(config.compactionThresholdTokens).toBe(0);
   });
+
+  it("leaves skill roots unset when nothing pins them", () => {
+    // Unset means "discover the defaults", which is not the same as empty.
+    expect(resolveEnvConfig({}, "sk").skillRoots).toBeUndefined();
+  });
+
+  it("reads skill roots from the environment, an empty value meaning none", () => {
+    expect(
+      resolveEnvConfig({ ACP_SKILL_ROOTS: ["/a/skills", "/b/skills"].join(delimiter) }, "sk")
+        .skillRoots,
+    ).toEqual(["/a/skills", "/b/skills"]);
+    expect(resolveEnvConfig({ ACP_SKILL_ROOTS: "" }, "sk").skillRoots).toEqual([]);
+    expect(
+      resolveEnvConfig({ ACP_SKILL_ROOTS: ` /a/skills ${delimiter} ` }, "sk").skillRoots,
+    ).toEqual(["/a/skills"]);
+  });
+
+  it("reads skill roots from the config file when the environment is silent", () => {
+    expect(resolveEnvConfig({}, "sk", { skill_roots: ["/file/skills", 42, " "] }).skillRoots).toEqual(
+      ["/file/skills"],
+    );
+    expect(
+      resolveEnvConfig({}, "sk", { skillRoots: ["/camel/skills"] }).skillRoots,
+    ).toEqual(["/camel/skills"]);
+    expect(
+      resolveEnvConfig({}, "sk", { skill_roots: "/one/skills" + delimiter + "/two/skills" })
+        .skillRoots,
+    ).toEqual(["/one/skills", "/two/skills"]);
+    // A value that is not a list of paths pins nothing at all.
+    expect(resolveEnvConfig({}, "sk", { skill_roots: 7 }).skillRoots).toBeUndefined();
+  });
+
+  it("lets the environment win over the config file for skill roots", () => {
+    const config = resolveEnvConfig({ ACP_SKILL_ROOTS: "/env/skills" }, "sk", {
+      skill_roots: ["/file/skills"],
+    });
+
+    expect(config.skillRoots).toEqual(["/env/skills"]);
+  });
 });
 
 describe("resolveConfig", () => {
@@ -231,5 +273,197 @@ describe("resolveConfig", () => {
 
     expect(typeof config.apiKey).toBe("string");
     expect(config.baseUrl).toBeTruthy();
+  });
+});
+
+describe("mcpServersOption", () => {
+  it("keeps only the entries that are objects", () => {
+    expect(
+      resolveEnvConfig({}, "sk", { mcp_servers: [{ name: "a" }, 42, null, "nope", []] })
+        .mcpServers,
+    ).toEqual([{ name: "a" }]);
+  });
+
+  it("reports no servers when the list is empty or not a list", () => {
+    expect(resolveEnvConfig({}, "sk", { mcp_servers: [] }).mcpServers).toBeUndefined();
+    expect(resolveEnvConfig({}, "sk", { mcp_servers: "not a list" }).mcpServers).toBeUndefined();
+  });
+});
+
+/** A configuration shaped the way `resolveConfig` would have produced it. */
+function baseConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
+  return {
+    apiKey: "sk_test",
+    baseUrl: DEFAULT_BASE_URL,
+    model: "startup-model",
+    maxTurnRequests: 8,
+    permissionMode: "ask",
+    compactionThresholdTokens: 0,
+    defaultMode: "build",
+    defaultReasoning: "medium",
+    ...overrides,
+  };
+}
+
+describe("resolveSessionDefaults", () => {
+  it("keeps the startup values when no settings file was resolved", async () => {
+    const base = baseConfig({
+      model: "hand-set",
+      defaultMode: "plan",
+      defaultReasoning: "high",
+      mcpServers: [{ name: "from-startup" }],
+    });
+
+    const defaults = await resolveSessionDefaults(base);
+
+    expect(defaults).toEqual({
+      model: "hand-set",
+      defaultMode: "plan",
+      defaultReasoning: "high",
+      mcpServers: [{ name: "from-startup" }],
+    });
+  });
+
+  it("keeps the startup values when the resolved file cannot be read", async () => {
+    const home = await homeWith({});
+    const base = baseConfig({ settingsFile: join(home, "config-acp") });
+
+    expect(await resolveSessionDefaults(base)).toEqual({
+      model: "startup-model",
+      defaultMode: "build",
+      defaultReasoning: "medium",
+    });
+    expect(await resolveSessionDefaults(base)).not.toHaveProperty("mcpServers");
+  });
+
+  it("re-reads the values a changed file now holds", async () => {
+    const home = await homeWith({
+      "config-acp": {
+        model: "file-model",
+        default_mode: "plan",
+        default_reasoning: "low",
+        mcp_servers: [{ name: "from-file" }],
+      },
+    });
+    const base = baseConfig({ settingsFile: join(home, "config-acp") });
+
+    expect(await resolveSessionDefaults(base)).toEqual({
+      model: "file-model",
+      defaultMode: "plan",
+      defaultReasoning: "low",
+      mcpServers: [{ name: "from-file" }],
+    });
+  });
+
+  it("lets an environment override outrank the file", async () => {
+    const home = await homeWith({ "config-acp": { default_mode: "build" } });
+    const base = baseConfig({ settingsFile: join(home, "config-acp") });
+
+    const defaults = await resolveSessionDefaults(base, {
+      env: { ACP_DEFAULT_MODE: "plan" },
+      settingsFile: join(home, "config-acp"),
+    });
+
+    expect(defaults.defaultMode).toBe("plan");
+  });
+
+  it("drops servers the file no longer lists", async () => {
+    const home = await homeWith({ "config-acp": { model: "still-here" } });
+    const base = baseConfig({
+      settingsFile: join(home, "config-acp"),
+      mcpServers: [{ name: "removed" }],
+    });
+
+    const defaults = await resolveSessionDefaults(base);
+
+    expect(defaults.model).toBe("still-here");
+    expect(defaults).not.toHaveProperty("mcpServers");
+  });
+});
+
+describe("describeSettings", () => {
+  it("names every setting with the layer it came from", async () => {
+    const home = await homeWith({ "config-acp": { model: "from-file" } });
+
+    const rows = await describeSettings({
+      env: { POLLINATIONS_HOME: home },
+      settingsFile: join(home, "config-acp"),
+    });
+
+    const byLabel = (label: string): string =>
+      rows.find((row) => row.startsWith(label)) ?? "<missing>";
+
+    expect(rows).toHaveLength(10);
+    expect(byLabel("model")).toBe(`model${" ".repeat(23)} from-file  [file]`);
+    expect(byLabel("default_mode")).toContain("build  [default]");
+    expect(byLabel("skill_roots")).toContain("auto  [default]");
+    expect(byLabel("mcp_servers")).toContain("0 configured  [default]");
+  });
+
+  it("labels a value the environment supplies", async () => {
+    const home = await homeWith({});
+
+    const rows = await describeSettings({
+      env: { POLLINATIONS_HOME: home, POLLINATIONS_MODEL: "from-env" },
+      settingsFile: join(home, "config-acp"),
+    });
+
+    const model = rows.find((row) => row.startsWith("model"));
+    expect(model).toContain("from-env  [env: POLLINATIONS_MODEL]");
+  });
+
+  it("counts a present-but-empty skill-roots variable as an override", async () => {
+    const home = await homeWith({});
+
+    const rows = await describeSettings({
+      env: { POLLINATIONS_HOME: home, ACP_SKILL_ROOTS: "" },
+      settingsFile: join(home, "config-acp"),
+    });
+
+    const roots = rows.find((row) => row.startsWith("skill_roots"));
+    expect(roots).toContain("off  [env: ACP_SKILL_ROOTS]");
+  });
+
+  it("reports the key as present without ever printing it", async () => {
+    const home = await homeWith({});
+
+    const rows = await describeSettings({
+      env: { POLLINATIONS_HOME: home, POLLINATIONS_API_KEY: "sk_super_secret" },
+      settingsFile: join(home, "config-acp"),
+    });
+
+    const apiKey = rows.find((row) => row.startsWith("api_key"));
+    expect(apiKey).toContain("present  [env: POLLINATIONS_API_KEY]");
+    expect(apiKey).not.toContain("sk_super_secret");
+    expect(rows.join("\n")).not.toContain("sk_super_secret");
+  });
+
+  it("reads the file it is given rather than probing the home directory", async () => {
+    const home = await homeWith({ "config-acp": { model: "probed" } });
+    const elsewhere = join(home, "elsewhere.json");
+    await writeFile(elsewhere, JSON.stringify({ model: "named" }));
+
+    const rows = await describeSettings({
+      env: { POLLINATIONS_HOME: home },
+      settingsFile: elsewhere,
+    });
+
+    expect(rows.find((row) => row.startsWith("model"))).toContain("named");
+  });
+
+  it("labels a file value that the environment does not touch", async () => {
+    const home = await homeWith({
+      "config-acp": { mcp_servers: [{ name: "one" }], permission_mode: "allow" },
+    });
+
+    const rows = await describeSettings({
+      env: { POLLINATIONS_HOME: home },
+      settingsFile: join(home, "config-acp"),
+    });
+
+    expect(rows.find((row) => row.startsWith("mcp_servers"))).toContain("1 configured  [file]");
+    expect(rows.find((row) => row.startsWith("permission_mode"))).toContain(
+      "allow  [file]",
+    );
   });
 });
