@@ -78,7 +78,7 @@ export const AGENT_TITLE = "Pollinations";
  * Bumped together with `version` in `package.json` — see the versioning
  * policy in CONTRIBUTING.md; nothing checks the pair automatically.
  */
-export const AGENT_VERSION = "2.0.2";
+export const AGENT_VERSION = "2.0.3";
 
 export { promptToText } from "../messages.js";
 

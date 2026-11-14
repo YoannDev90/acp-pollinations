@@ -7,6 +7,8 @@ how versions are chosen and releases are cut is in
 [CONTRIBUTING.md](CONTRIBUTING.md#versioning-and-releases). Feature-by-feature
 protocol status lives in [COVERAGE.md](COVERAGE.md) rather than here.
 
+## [2.0.3]
+
 ## [2.0.1]
 
 ### Added
