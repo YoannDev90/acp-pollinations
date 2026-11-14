@@ -13,6 +13,12 @@ protocol status lives in [COVERAGE.md](COVERAGE.md) rather than here.
 
 - placeholder for 2.0.1 release
 
+## [2.0.2]
+
+### Added
+
+- placeholder for 2.0.2 release
+
 ## [Unreleased]
 
 Nothing has been published to npm yet, so every entry below ships for the
