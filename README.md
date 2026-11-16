@@ -102,16 +102,16 @@ then `config.json`). Keys: `model`, `base_url`, `permission_mode`,
 Environment variables take precedence; only the key falls back to
 `credentials.json`.
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `POLLINATIONS_API_KEY` | — | Pollinations secret key. |
-| `POLLINATIONS_BASE_URL` | `https://gen.pollinations.ai` | OpenAI-compatible API base, no trailing slash. |
-| `POLLINATIONS_MODEL` | `z-ai/glm-5.3-flash` | Model a session starts on. |
-| `POLLINATIONS_HOME` | `~/.pollinations` | Home for credentials, sessions, and logs. |
-| `ACP_MAX_TURN_REQUESTS` | `24` | Ceiling on model requests per prompt turn. |
-| `ACP_COMPACTION_THRESHOLD_TOKENS` | `0` (auto) | Prompt tokens at/above which a transcript is summarised. `0` = 85% of the model's context window; negative disables. |
-| `ACP_PERMISSION_MODE` | `ask` | `ask` prompts before mutating; `allow` skips (CI/demos). |
-| `ACP_SKILL_ROOTS` | see [Skills](#skills) | `:`-separated directories scanned for `SKILL.md`. Present but empty disables skills. |
+| Variable                          | Default                       | Purpose                                                                                                              |
+| --------------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `POLLINATIONS_API_KEY`            | —                             | Pollinations secret key.                                                                                             |
+| `POLLINATIONS_BASE_URL`           | `https://gen.pollinations.ai` | OpenAI-compatible API base, no trailing slash.                                                                       |
+| `POLLINATIONS_MODEL`              | `z-ai/glm-5.3-flash`          | Model a session starts on.                                                                                           |
+| `POLLINATIONS_HOME`               | `~/.pollinations`             | Home for credentials, sessions, and logs.                                                                            |
+| `ACP_MAX_TURN_REQUESTS`           | `0`                           | Ceiling on model requests per prompt turn. `0` means unlimited.                                                      |
+| `ACP_COMPACTION_THRESHOLD_TOKENS` | `0` (auto)                    | Prompt tokens at/above which a transcript is summarised. `0` = 85% of the model's context window; negative disables. |
+| `ACP_PERMISSION_MODE`             | `ask`                         | `ask` prompts before mutating; `allow` skips (CI/demos).                                                             |
+| `ACP_SKILL_ROOTS`                 | see [Skills](#skills)         | `:`-separated directories scanned for `SKILL.md`. Present but empty disables skills.                                 |
 
 ## Model picker
 
@@ -122,13 +122,13 @@ with tool calling reachable through chat completions.
 
 Models are grouped by origin and billing tier:
 
-| Group | Meaning |
-|---|---|
-| `official-paid` | First-party models with `paid_only: true`. |
-| `official-quest` | First-party metered models. |
-| `community-paid` | Community models with `paid_only: true`. |
-| `community-quest` | Community metered models. |
-| `community-free` | Community models publishing an explicit 0 in / 0 out, or no price at all (except agent models). |
+| Group             | Meaning                                                                                         |
+| ----------------- | ----------------------------------------------------------------------------------------------- |
+| `official-paid`   | First-party models with `paid_only: true`.                                                      |
+| `official-quest`  | First-party metered models.                                                                     |
+| `community-paid`  | Community models with `paid_only: true`.                                                        |
+| `community-quest` | Community metered models.                                                                       |
+| `community-free`  | Community models publishing an explicit 0 in / 0 out, or no price at all (except agent models). |
 
 There is no `official-free` group: a missing price on a first-party model means
 the price varies, not that it is free. Hand-written `:free` / `:paid` suffixes
@@ -152,17 +152,17 @@ front of the model and replays the transcript so the client can render it.
 
 All tools run inside the session workspace root set:
 
-| Tool | Kind | Mutating |
-|---|---|---|
-| `read_file` | read | no |
-| `write_file` | edit | yes |
-| `edit_file` | edit | yes |
-| `list_dir` | read | no |
-| `glob` | search | no |
-| `grep` | search | no |
-| `bash` | execute | yes |
-| `list_skills` | read | no |
-| `read_skill` | read | no |
+| Tool          | Kind    | Mutating |
+| ------------- | ------- | -------- |
+| `read_file`   | read    | no       |
+| `write_file`  | edit    | yes      |
+| `edit_file`   | edit    | yes      |
+| `list_dir`    | read    | no       |
+| `glob`        | search  | no       |
+| `grep`        | search  | no       |
+| `bash`        | execute | yes      |
+| `list_skills` | read    | no       |
+| `read_skill`  | read    | no       |
 
 Mutating tools raise `session/request_permission` in `ask` mode. Read-only tools
 run without prompting. Plan mode disables mutations entirely.

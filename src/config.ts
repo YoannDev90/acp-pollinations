@@ -3,7 +3,11 @@ import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 
 import { stripTrailingSlashes } from "./net.js";
-import { findSettingsFile, readSettingsFile, readSettingsFileAt } from "./settings-file.js";
+import {
+  findSettingsFile,
+  readSettingsFile,
+  readSettingsFileAt,
+} from "./settings-file.js";
 
 /** Default Pollinations API base URL (OpenAI-compatible). */
 export const DEFAULT_BASE_URL = "https://gen.pollinations.ai";
@@ -139,7 +143,8 @@ async function settingsRecord(
   options: ResolveConfigOptions,
   env: NodeJS.ProcessEnv,
 ): Promise<Record<string, unknown>> {
-  if (options.settingsFile !== undefined) return readSettingsFileAt(options.settingsFile);
+  if (options.settingsFile !== undefined)
+    return readSettingsFileAt(options.settingsFile);
   return readSettingsFile(homeDir(env));
 }
 
@@ -167,7 +172,8 @@ export async function resolveApiKey(
   const configFile = await settingsRecord(options, env);
   const fromConfig =
     configFile.api_key ?? configFile.apiKey ?? configFile.pollinations_api_key;
-  if (typeof fromConfig === "string" && fromConfig.trim()) return fromConfig.trim();
+  if (typeof fromConfig === "string" && fromConfig.trim())
+    return fromConfig.trim();
 
   const credentialsFile =
     options.credentialsFile ?? join(home, "credentials.json");
@@ -221,7 +227,8 @@ function skillRootsOption(
   if (Array.isArray(raw)) {
     const roots: string[] = [];
     for (const candidate of raw as unknown[]) {
-      if (typeof candidate === "string" && candidate.trim()) roots.push(candidate.trim());
+      if (typeof candidate === "string" && candidate.trim())
+        roots.push(candidate.trim());
     }
     return roots;
   }
@@ -273,18 +280,21 @@ export function resolveEnvConfig(
   apiKey: string,
   configFile: Record<string, unknown> = {},
 ): AgentConfig {
-  const permissionMode = (
-    env.ACP_PERMISSION_MODE?.trim() ||
-    (typeof configFile.permission_mode === "string" ? configFile.permission_mode.trim() : "") ||
-    (typeof configFile.permissionMode === "string" ? configFile.permissionMode.trim() : "")
-  ) === "allow"
-    ? "allow"
-    : "ask";
+  const permissionMode =
+    (env.ACP_PERMISSION_MODE?.trim() ||
+      (typeof configFile.permission_mode === "string"
+        ? configFile.permission_mode.trim()
+        : "") ||
+      (typeof configFile.permissionMode === "string"
+        ? configFile.permissionMode.trim()
+        : "")) === "allow"
+      ? "allow"
+      : "ask";
 
   const maxTurnRequests = Number.parseInt(
     env.ACP_MAX_TURN_REQUESTS ??
       scalarOption(configFile.max_turn_requests, configFile.maxTurnRequests) ??
-      "",
+      "0",
     10,
   );
   const compactionTokens = Number.parseInt(
@@ -314,7 +324,9 @@ export function resolveEnvConfig(
 
   const baseUrl =
     env.POLLINATIONS_BASE_URL?.trim() ||
-    (typeof configFile.base_url === "string" ? configFile.base_url.trim() : "") ||
+    (typeof configFile.base_url === "string"
+      ? configFile.base_url.trim()
+      : "") ||
     (typeof configFile.baseUrl === "string" ? configFile.baseUrl.trim() : "") ||
     DEFAULT_BASE_URL;
 
@@ -390,7 +402,9 @@ export async function resolveConfig(
 export async function resolveSessionDefaults(
   base: AgentConfig,
   options: ResolveConfigOptions = {},
-): Promise<Pick<AgentConfig, "model" | "defaultMode" | "defaultReasoning" | "mcpServers">> {
+): Promise<
+  Pick<AgentConfig, "model" | "defaultMode" | "defaultReasoning" | "mcpServers">
+> {
   const path = options.settingsFile ?? base.settingsFile;
   // No resolved file means there is no file layer to apply. A configuration
   // assembled by hand has no home directory behind it, and probing the real
@@ -401,18 +415,25 @@ export async function resolveSessionDefaults(
   const configFile = await readSettingsFileAt(path);
   if (Object.keys(configFile).length === 0) return sessionDefaultsOf(base);
 
-  return sessionDefaultsOf(resolveEnvConfig(options.env ?? process.env, base.apiKey, configFile));
+  return sessionDefaultsOf(
+    resolveEnvConfig(options.env ?? process.env, base.apiKey, configFile),
+  );
 }
 
 /** The four settings a session opens with; the rest are fixed for the process. */
 function sessionDefaultsOf(
   config: AgentConfig,
-): Pick<AgentConfig, "model" | "defaultMode" | "defaultReasoning" | "mcpServers"> {
+): Pick<
+  AgentConfig,
+  "model" | "defaultMode" | "defaultReasoning" | "mcpServers"
+> {
   return {
     model: config.model,
     defaultMode: config.defaultMode,
     defaultReasoning: config.defaultReasoning,
-    ...(config.mcpServers !== undefined ? { mcpServers: config.mcpServers } : {}),
+    ...(config.mcpServers !== undefined
+      ? { mcpServers: config.mcpServers }
+      : {}),
   };
 }
 
@@ -424,7 +445,9 @@ function sessionDefaultsOf(
  * the file is knowing which key will actually change behaviour. The key never
  * appears: a transcript is persisted, and "present" is all anyone needs.
  */
-export async function describeSettings(options: ResolveConfigOptions = {}): Promise<string[]> {
+export async function describeSettings(
+  options: ResolveConfigOptions = {},
+): Promise<string[]> {
   const env = options.env ?? process.env;
   const file = await settingsRecord(options, env);
   const config = resolveEnvConfig(env, await resolveApiKey(options), file);
@@ -445,7 +468,12 @@ export async function describeSettings(options: ResolveConfigOptions = {}): Prom
       variable: "POLLINATIONS_API_KEY",
       keys: ["api_key", "apiKey", "pollinations_api_key"],
     },
-    { label: "model", value: config.model, variable: "POLLINATIONS_MODEL", keys: ["model"] },
+    {
+      label: "model",
+      value: config.model,
+      variable: "POLLINATIONS_MODEL",
+      keys: ["model"],
+    },
     {
       label: "base_url",
       value: config.baseUrl,
